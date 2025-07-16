@@ -18,7 +18,7 @@ main_channel_id = os.getenv("MAIN_CHANNEL_ID")
 ktb_channel_id = os.getenv("KTB_CHANNEL_ID")
 spam_channel_id = os.getenv("SPAM_CHANNEL_ID")
 karuta_id = "646937666251915264"
-karibbit_id = "1274445226064220273"
+karibbit_id = "1311684840462225440"
 
 # --- BIẾN TRẠNG THÁI ---
 bots, acc_names = [], [
