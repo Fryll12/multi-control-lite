@@ -128,7 +128,13 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                 if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                                     desc = msg_item["embeds"][0].get("description", "")
                                     lines = desc.split('\n')
-                                    heart_numbers = [int(m[1]) if len(m := re.findall(r'`([^`]*)`', line)) >= 2 and m[1].isdigit() else 0 for line in lines[:3]]
+                                    heart_numbers = []
+                                    for line in lines[:3]:
+                                        match = re.search(r'♡(\d+)', line)
+                                        if match:
+                                            heart_numbers.append(int(match.group(1)))
+                                        else:
+                                            heart_numbers.append(0)
                                     max_num = max(heart_numbers)
                                     if sum(heart_numbers) > 0 and max_num >= heart_threshold_2:
                                         max_index = heart_numbers.index(max_num)
@@ -158,7 +164,13 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                 if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                                     desc = msg_item["embeds"][0].get("description", "")
                                     lines = desc.split('\n')
-                                    heart_numbers = [int(m[1]) if len(m := re.findall(r'`([^`]*)`', line)) >= 2 and m[1].isdigit() else 0 for line in lines[:3]]
+                                    heart_numbers = []
+                                    for line in lines[:3]:
+                                        match = re.search(r'♡(\d+)', line)
+                                        if match:
+                                            heart_numbers.append(int(match.group(1)))
+                                        else:
+                                            heart_numbers.append(0)
                                     max_num = max(heart_numbers)
                                     if sum(heart_numbers) > 0 and max_num >= heart_threshold_3:
                                         max_index = heart_numbers.index(max_num)
