@@ -138,7 +138,7 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                     max_num = max(heart_numbers)
                                     if sum(heart_numbers) > 0 and max_num >= heart_threshold_2:
                                         max_index = heart_numbers.index(max_num)
-                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 0.8), ("3️⃣", 0.9)][max_index]
+                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
                                         print(f"[Bot 2] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                                         def grab_2():
                                             bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
@@ -174,7 +174,7 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                     max_num = max(heart_numbers)
                                     if sum(heart_numbers) > 0 and max_num >= heart_threshold_3:
                                         max_index = heart_numbers.index(max_num)
-                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 0.8), ("3️⃣", 0.9)][max_index]
+                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
                                         print(f"[Bot 3] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                                         def grab_3():
                                             bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
