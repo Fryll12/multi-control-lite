@@ -1,3 +1,4 @@
+# PHIÊN BẢN LITE - ĐÃ TÍCH HỢP LƯU/TẢI JSON
 import discum
 import threading
 import time
@@ -21,7 +22,7 @@ spam_channel_id = os.getenv("SPAM_CHANNEL_ID")
 karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 
-# --- BIẾN TRẠNG THÁI ---
+# --- BIẾN TRẠNG THÁI (đây là các giá trị mặc định nếu không có file settings.json) ---
 bots, acc_names = [], [
     "Blacklist", "Khanh bang", "Dersale", "Venus", "WhyK", "Tan",
     "Ylang", "Nina", "Nathan", "Ofer", "White", "the Wicker", "Leader", "Tess", "Wyatt", "Daisy", "CantStop", "Token",
@@ -31,20 +32,24 @@ auto_grab_enabled, auto_grab_enabled_2, auto_grab_enabled_3 = False, False, Fals
 heart_threshold, heart_threshold_2, heart_threshold_3 = 50, 50, 50
 spam_enabled, auto_reboot_enabled = False, False
 spam_message, spam_delay, auto_reboot_delay = "", 10, 3600
+
+# Timestamps - sẽ được load từ file
 last_reboot_cycle_time, last_spam_time = 0, 0
+
+# Các biến điều khiển luồng
 auto_reboot_stop_event = threading.Event()
 spam_thread, auto_reboot_thread = None, None
 bots_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
 
-
-# --- HÀM LƯU VÀ TẢI CÀI ĐẶT (ĐƯỢC THÊM VÀO) ---
+# --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
 def save_settings():
     """Lưu cài đặt lên JSONBin.io"""
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
-    if not api_key or not bin_id: return
+    if not api_key or not bin_id:
+        return
 
     settings = {
         'auto_grab_enabled': auto_grab_enabled, 'heart_threshold': heart_threshold,
@@ -56,48 +61,52 @@ def save_settings():
         'last_reboot_cycle_time': last_reboot_cycle_time,
         'last_spam_time': last_spam_time,
     }
-    headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Master-Key': api_key
+    }
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+    
     try:
         req = requests.put(url, json=settings, headers=headers, timeout=10)
         if req.status_code == 200:
-            print("[Settings] Đã lưu cài đặt lên JSONBin.io.", flush=True)
+            print("[Settings] Đã lưu cài đặt lên JSONBin.io thành công.", flush=True)
         else:
-            print(f"[Settings] Lỗi khi lưu: {req.status_code}", flush=True)
+            print(f"[Settings] Lỗi khi lưu cài đặt lên JSONBin.io: {req.status_code} - {req.text}", flush=True)
     except Exception as e:
-        print(f"[Settings] Exception khi lưu: {e}", flush=True)
+        print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
+
 
 def load_settings():
-    """Tải cài đặt từ JSONBin.io và tự động bật lại tính năng"""
+    """Tải cài đặt từ JSONBin.io"""
+    api_key = os.getenv("JSONBIN_API_KEY")
+    bin_id = os.getenv("JSONBIN_BIN_ID")
+    if not api_key or not bin_id:
+        print("[Settings] Thiếu API Key hoặc Bin ID của JSONBin. Sử dụng cài đặt mặc định.", flush=True)
+        return
+
+    headers = {
+        'X-Master-Key': api_key
+    }
+    url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
+
     try:
-        api_key = os.getenv("JSONBIN_API_KEY")
-        bin_id = os.getenv("JSONBIN_BIN_ID")
-        if not api_key or not bin_id: return
-        headers = {'X-Master-Key': api_key, 'X-Bin-Meta': 'false'}
-        url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
         req = requests.get(url, headers=headers, timeout=10)
         if req.status_code == 200:
-            settings = req.json()
-            if settings: 
+            settings = req.json().get("record", {})
+            if settings: # Chỉ load nếu bin không rỗng
                 globals().update(settings)
-                print("[Settings] Đã tải cài đặt từ JSONBin.", flush=True)
+                print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
+            else:
+                print("[Settings] JSONBin rỗng, bắt đầu với cài đặt mặc định và lưu lại.", flush=True)
+                save_settings() # Lưu cài đặt mặc định lên bin lần đầu
+        else:
+            print(f"[Settings] Lỗi khi tải cài đặt từ JSONBin.io: {req.status_code} - {req.text}", flush=True)
+    except Exception as e:
+        print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
 
-                # Logic tự động bật lại các tính năng chính
-                print("[System] Kích hoạt lại các tính năng tự động sau khi khởi động...", flush=True)
-                globals()['auto_grab_enabled'] = True
-                globals()['auto_grab_enabled_2'] = True
-                globals()['auto_grab_enabled_3'] = True
-
-    except Exception: pass
-
-def periodic_save_loop():
-    """Vòng lặp nền để tự động lưu cài đặt 10 tiếng một lần."""
-    while True:
-        time.sleep(36000) # 36000 giây = 10 tiếng
-        print("[Settings] Bắt đầu lưu định kỳ...", flush=True)
-        save_settings()
-
-# --- CÁC HÀM LOGIC BOT (KHÔNG THAY ĐỔI) ---
+# --- CÁC HÀM LOGIC BOT ---
 def reboot_bot(target_id):
     global main_bot, main_bot_2, main_bot_3
     with bots_lock:
@@ -136,124 +145,137 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                     else: bot_type = ""
                     print(f"Đã đăng nhập: {user_id} {bot_type}", flush=True)
 
-    @bot.gateway.command
-    def on_message(resp):
-        if resp.event.message:
-            msg = resp.parsed.auto()
-            # Grab cho Bot 1
-            if is_main and auto_grab_enabled and msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
-                last_drop_msg_id = msg["id"]
-                def read_karibbit():
-                    time.sleep(0.5)
-                    try:
-                        messages = bot.getMessages(main_channel_id, num=5).json()
-                        for msg_item in messages:
-                            if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                desc = msg_item["embeds"][0].get("description", "")
-                                lines = desc.split('\n')
-                                heart_numbers = []
-                                for line in lines[:3]:
-                                    match = re.search(r'♡(\d+)', line)
-                                    if match:
-                                        heart_numbers.append(int(match.group(1)))
-                                    else:
-                                        heart_numbers.append(0)
-                                max_num = max(heart_numbers)
-                                if sum(heart_numbers) > 0 and max_num >= heart_threshold:
-                                    max_index = heart_numbers.index(max_num)
-                                    emoji, delay = [("1️⃣", 0.4), ("2️⃣", 1.4), ("3️⃣", 2.1)][max_index]
-                                    print(f"[Bot 1] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
-                                    def grab():
-                                        bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1)
-                                        bot.sendMessage(ktb_channel_id, "kt b")
-                                    threading.Timer(delay, grab).start()
-                                break
-                    except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 1): {e}", flush=True)
-                threading.Thread(target=read_karibbit).start()
-            
-            # Grab cho Bot 2
-            if is_main_2 and auto_grab_enabled_2 and msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
-                last_drop_msg_id = msg["id"]
-                def read_karibbit_2():
-                    time.sleep(0.5)
-                    try:
-                        messages = bot.getMessages(main_channel_id, num=5).json()
-                        for msg_item in messages:
-                            if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                desc = msg_item["embeds"][0].get("description", "")
-                                lines = desc.split('\n')
-                                heart_numbers = []
-                                for line in lines[:3]:
-                                    match = re.search(r'♡(\d+)', line)
-                                    if match:
-                                        heart_numbers.append(int(match.group(1)))
-                                    else:
-                                        heart_numbers.append(0)
-                                max_num = max(heart_numbers)
-                                if sum(heart_numbers) > 0 and max_num >= heart_threshold_2:
-                                    max_index = heart_numbers.index(max_num)
-                                    emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
-                                    print(f"[Bot 2] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
-                                    def grab_2():
-                                        bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1)
-                                        bot.sendMessage(ktb_channel_id, "kt b")
-                                    threading.Timer(delay, grab_2).start()
-                                break
-                    except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 2): {e}", flush=True)
-                threading.Thread(target=read_karibbit_2).start()
-                
-            # Grab cho Bot 3
-            if is_main_3 and auto_grab_enabled_3 and msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
-                last_drop_msg_id = msg["id"]
-                def read_karibbit_3():
-                    time.sleep(0.5)
-                    try:
-                        messages = bot.getMessages(main_channel_id, num=5).json()
-                        for msg_item in messages:
-                            if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                desc = msg_item["embeds"][0].get("description", "")
-                                lines = desc.split('\n')
-                                heart_numbers = []
-                                for line in lines[:3]:
-                                    match = re.search(r'♡(\d+)', line)
-                                    if match:
-                                        heart_numbers.append(int(match.group(1)))
-                                    else:
-                                        heart_numbers.append(0)
-                                max_num = max(heart_numbers)
-                                if sum(heart_numbers) > 0 and max_num >= heart_threshold_3:
-                                    max_index = heart_numbers.index(max_num)
-                                    emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
-                                    print(f"[Bot 3] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
-                                    def grab_3():
-                                        bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1)
-                                        bot.sendMessage(ktb_channel_id, "kt b")
-                                    threading.Timer(delay, grab_3).start()
-                                break
-                    except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 3): {e}", flush=True)
-                threading.Thread(target=read_karibbit_3).start()
+    if is_main:
+        @bot.gateway.command
+        def on_message(resp):
+            global auto_grab_enabled, heart_threshold
+            if resp.event.message and auto_grab_enabled:
+                msg = resp.parsed.auto()
+                if msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
+                    last_drop_msg_id = msg["id"]
+                    def read_karibbit():
+                        time.sleep(0.5)
+                        try:
+                            messages = bot.getMessages(main_channel_id, num=5).json()
+                            for msg_item in messages:
+                                if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                                    desc = msg_item["embeds"][0].get("description", "")
+                                    lines = desc.split('\n')
+                                    heart_numbers = []
+                                    for line in lines[:3]:
+                                        match = re.search(r'♡(\d+)', line)
+                                        if match:
+                                            heart_numbers.append(int(match.group(1)))
+                                        else:
+                                            heart_numbers.append(0)
+                                    max_num = max(heart_numbers)
+                                    if sum(heart_numbers) > 0 and max_num >= heart_threshold:
+                                        max_index = heart_numbers.index(max_num)
+                                        emoji, delay = [("1️⃣", 0.4), ("2️⃣", 1.4), ("3️⃣", 2.1)][max_index]
+                                        print(f"[Bot 1] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                                        def grab():
+                                            bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
+                                            time.sleep(1)
+                                            bot.sendMessage(ktb_channel_id, "kt b")
+                                        threading.Timer(delay, grab).start()
+                                    break
+                        except Exception as e: print(f"Lỗi khi đọc tin nhắn Karibbit (Bot 1): {e}", flush=True)
+                    threading.Thread(target=read_karibbit).start()
+    if is_main_2:
+        @bot.gateway.command
+        def on_message_2(resp):
+            global auto_grab_enabled_2, heart_threshold_2
+            if resp.event.message and auto_grab_enabled_2:
+                msg = resp.parsed.auto()
+                if msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
+                    last_drop_msg_id = msg["id"]
+                    def read_karibbit_2():
+                        time.sleep(0.5)
+                        try:
+                            messages = bot.getMessages(main_channel_id, num=5).json()
+                            for msg_item in messages:
+                                if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                                    desc = msg_item["embeds"][0].get("description", "")
+                                    lines = desc.split('\n')
+                                    heart_numbers = []
+                                    for line in lines[:3]:
+                                        match = re.search(r'♡(\d+)', line)
+                                        if match:
+                                            heart_numbers.append(int(match.group(1)))
+                                        else:
+                                            heart_numbers.append(0)
+                                    max_num = max(heart_numbers)
+                                    if sum(heart_numbers) > 0 and max_num >= heart_threshold_2:
+                                        max_index = heart_numbers.index(max_num)
+                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
+                                        print(f"[Bot 2] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                                        def grab_2():
+                                            bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
+                                            time.sleep(1)
+                                            bot.sendMessage(ktb_channel_id, "kt b")
+                                        threading.Timer(delay, grab_2).start()
+                                    break
+                        except Exception as e: print(f"Lỗi khi đọc tin nhắn Karibbit (Bot 2): {e}", flush=True)
+                    threading.Thread(target=read_karibbit_2).start()
+    if is_main_3:
+        @bot.gateway.command
+        def on_message_3(resp):
+            global auto_grab_enabled_3, heart_threshold_3
+            if resp.event.message and auto_grab_enabled_3:
+                msg = resp.parsed.auto()
+                if msg.get("author", {}).get("id") == karuta_id and msg.get("channel_id") == main_channel_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
+                    last_drop_msg_id = msg["id"]
+                    def read_karibbit_3():
+                        time.sleep(0.5)
+                        try:
+                            messages = bot.getMessages(main_channel_id, num=5).json()
+                            for msg_item in messages:
+                                if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                                    desc = msg_item["embeds"][0].get("description", "")
+                                    lines = desc.split('\n')
+                                    heart_numbers = []
+                                    for line in lines[:3]:
+                                        match = re.search(r'♡(\d+)', line)
+                                        if match:
+                                            heart_numbers.append(int(match.group(1)))
+                                        else:
+                                            heart_numbers.append(0)
+                                    max_num = max(heart_numbers)
+                                    if sum(heart_numbers) > 0 and max_num >= heart_threshold_3:
+                                        max_index = heart_numbers.index(max_num)
+                                        emoji, delay = [("1️⃣", 0.7), ("2️⃣", 1.8), ("3️⃣", 2.4)][max_index]
+                                        print(f"[Bot 3] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                                        def grab_3():
+                                            bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
+                                            time.sleep(1)
+                                            bot.sendMessage(ktb_channel_id, "kt b")
+                                        threading.Timer(delay, grab_3).start()
+                                    break
+                        except Exception as e: print(f"Lỗi khi đọc tin nhắn Karibbit (Bot 3): {e}", flush=True)
+                    threading.Thread(target=read_karibbit_3).start()
 
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN (KHÔNG THAY ĐỔI) ---
+# --- CÁC VÒNG LẶP NỀN ---
 def auto_reboot_loop():
     global last_reboot_cycle_time
     while not auto_reboot_stop_event.is_set():
         try:
             interrupted = auto_reboot_stop_event.wait(timeout=60)
             if interrupted: break
+
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
                 print("[Reboot] Hết thời gian chờ, tiến hành reboot 3 tài khoản chính.", flush=True)
                 if main_bot: reboot_bot('main_1'); time.sleep(5)
                 if main_bot_2: reboot_bot('main_2'); time.sleep(5)
                 if main_bot_3: reboot_bot('main_3')
                 last_reboot_cycle_time = time.time()
+                save_settings() # Lưu lại timestamp mới
+
         except Exception as e:
-            print(f"[ERROR in auto_reboot_loop] {e}", flush=True); time.sleep(60)
+            print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
+            time.sleep(60)
     print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
 
 def spam_loop():
@@ -268,18 +290,28 @@ def spam_loop():
                         if not spam_enabled: break
                         try:
                             bot.sendMessage(spam_channel_id, spam_message)
-                        except Exception as e: print(f"Lỗi gửi spam: {e}", flush=True)
+                        except Exception as e:
+                            print(f"Lỗi gửi spam: {e}", flush=True)
                         time.sleep(2)
                     if spam_enabled:
                         last_spam_time = time.time()
             time.sleep(1)
         except Exception as e:
-            print(f"[ERROR in spam_loop] {e}", flush=True); time.sleep(1)
+            print(f"[ERROR in spam_loop] {e}", flush=True)
+            time.sleep(1)
 
-
+def periodic_save_loop():
+    """Vòng lặp nền để tự động lưu cài đặt 10 tiếng một lần."""
+    while True:
+        # Chờ 36000 giây (10 tiếng)
+        time.sleep(36000)
+        
+        print("[Settings] Bắt đầu lưu định kỳ (10 giờ)...", flush=True)
+        save_settings()
+        
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB (KHÔNG THAY ĐỔI) ---
+# --- GIAO DIỆN WEB ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -290,7 +322,11 @@ HTML_TEMPLATE = """
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
     <style>
-        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; }
+        :root {
+            --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333;
+            --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff;
+            --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc;
+        }
         body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); }
@@ -301,10 +337,11 @@ HTML_TEMPLATE = """
         .panel h2 i { margin-right: 10px; }
         .btn { background: var(--secondary-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; }
         .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
-        .input-group label { padding: 10px; background: #000; border: 1px solid var(--border-color); border-right: none; border-radius: 4px 0 0 4px; }
+        .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center;}
         .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
         .grab-section { margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
         .grab-section h3 { margin-top:0; display: flex; justify-content: space-between; align-items: center;}
+        .grab-section .input-group input { border-radius: 4px;}
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .status-panel { grid-column: 1 / -1; }
         .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
@@ -339,20 +376,20 @@ HTML_TEMPLATE = """
             </div>
             <div class="panel">
                 <h2><i class="fas fa-crosshairs"></i> Soul Harvest</h2>
-                <div class="grab-section"><h3>ALPHA NODE <span id="harvest-status-1" class="status-badge">OFF</span></h3><div class="input-group"><input type="number" id="heart-threshold-1" value="50" min="0"><button type="button" id="harvest-toggle-1" class="btn">ENABLE</button></div></div>
-                <div class="grab-section"><h3>BETA NODE <span id="harvest-status-2" class="status-badge">OFF</span></h3><div class="input-group"><input type="number" id="heart-threshold-2" value="50" min="0"><button type="button" id="harvest-toggle-2" class="btn">ENABLE</button></div></div>
-                <div class="grab-section"><h3>GAMMA NODE <span id="harvest-status-3" class="status-badge">OFF</span></h3><div class="input-group"><input type="number" id="heart-threshold-3" value="50" min="0"><button type="button" id="harvest-toggle-3" class="btn">ENABLE</button></div></div>
+                <div class="grab-section"><h3>ALPHA NODE <span id="harvest-status-1" class="status-badge {{ grab_status }}">{{ grab_text }}</span></h3><div class="input-group"><input type="number" id="heart-threshold-1" value="{{ heart_threshold }}" min="0"><button type="button" id="harvest-toggle-1" class="btn">{{ grab_action }}</button></div></div>
+                <div class="grab-section"><h3>BETA NODE <span id="harvest-status-2" class="status-badge {{ grab_status_2 }}">{{ grab_text_2 }}</span></h3><div class="input-group"><input type="number" id="heart-threshold-2" value="{{ heart_threshold_2 }}" min="0"><button type="button" id="harvest-toggle-2" class="btn">{{ grab_action_2 }}</button></div></div>
+                <div class="grab-section"><h3>GAMMA NODE <span id="harvest-status-3" class="status-badge {{ grab_status_3 }}">{{ grab_text_3 }}</span></h3><div class="input-group"><input type="number" id="heart-threshold-3" value="{{ heart_threshold_3 }}" min="0"><button type="button" id="harvest-toggle-3" class="btn">{{ grab_action_3 }}</button></div></div>
             </div>
             <div class="panel">
                  <h2><i class="fas fa-skull"></i> Auto Resurrection</h2>
-                <div class="input-group"><label>Interval (s)</label><input type="number" id="auto-reboot-delay" value="3600"></div>
-                <button type="button" id="auto-reboot-toggle-btn" class="btn">ENABLE AUTO REBOOT</button>
+                <div class="input-group"><label>Interval (s)</label><input type="number" id="auto-reboot-delay" value="{{ auto_reboot_delay }}"></div>
+                <button type="button" id="auto-reboot-toggle-btn" class="btn">{{ reboot_action }} AUTO REBOOT</button>
             </div>
             <div class="panel">
                 <h2><i class="fas fa-paper-plane"></i> Auto Broadcast</h2>
-                <div class="input-group"><label>Message</label><textarea id="spam-message" rows="2"></textarea></div>
-                <div class="input-group"><label>Delay (s)</label><input type="number" id="spam-delay" value="10"></div>
-                <button type="button" id="spam-toggle-btn" class="btn">ENABLE SPAM</button>
+                <div class="input-group"><label>Message</label><textarea id="spam-message" rows="2">{{ spam_message }}</textarea></div>
+                <div class="input-group"><label>Delay (s)</label><input type="number" id="spam-delay" value="{{ spam_delay }}"></div>
+                <button type="button" id="spam-toggle-btn" class="btn">{{ spam_action }} SPAM</button>
             </div>
         </div>
     </div>
@@ -375,6 +412,10 @@ HTML_TEMPLATE = """
                 });
                 const result = await response.json();
                 showStatusMessage(result.message);
+                // Call save_settings after a successful operation
+                if (result.status === 'success') {
+                    fetch('/api/save_settings', { method: 'POST' });
+                }
                 setTimeout(fetchStatus, 500);
                 return result;
             } catch (error) {
@@ -405,26 +446,20 @@ HTML_TEMPLATE = """
                 updateElement('reboot-timer', { textContent: formatTime(data.reboot_countdown) });
                 updateElement('reboot-status-badge', { textContent: data.reboot_enabled ? 'ON' : 'OFF', className: `status-badge ${data.reboot_enabled ? 'active' : 'inactive'}` });
                 updateElement('auto-reboot-toggle-btn', { textContent: `${data.reboot_enabled ? 'DISABLE' : 'ENABLE'} AUTO REBOOT`});
-                updateElement('auto-reboot-delay', { value: data.auto_reboot_delay });
 
                 updateElement('spam-timer', { textContent: formatTime(data.spam_countdown) });
                 updateElement('spam-status-badge', { textContent: data.spam_enabled ? 'ON' : 'OFF', className: `status-badge ${data.spam_enabled ? 'active' : 'inactive'}` });
                 updateElement('spam-toggle-btn', { textContent: `${data.spam_enabled ? 'DISABLE' : 'ENABLE'} SPAM`});
-                updateElement('spam-message', { value: data.spam_message });
-                updateElement('spam-delay', { value: data.spam_delay });
 
                 const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
                 updateElement('uptime-timer', { textContent: formatTime(serverUptimeSeconds) });
                 
                 updateElement('harvest-status-1', { textContent: data.grab_text, className: `status-badge ${data.grab_status}` });
                 updateElement('harvest-toggle-1', { textContent: data.grab_action });
-                updateElement('heart-threshold-1', { value: data.heart_threshold });
                 updateElement('harvest-status-2', { textContent: data.grab_text_2, className: `status-badge ${data.grab_status_2}` });
                 updateElement('harvest-toggle-2', { textContent: data.grab_action_2 });
-                updateElement('heart-threshold-2', { value: data.heart_threshold_2 });
                 updateElement('harvest-status-3', { textContent: data.grab_text_3, className: `status-badge ${data.grab_status_3}` });
                 updateElement('harvest-toggle-3', { textContent: data.grab_action_3 });
-                updateElement('heart-threshold-3', { value: data.heart_threshold_3 });
                 
                 const listContainer = document.getElementById('bot-status-list');
                 listContainer.innerHTML = ''; 
@@ -546,6 +581,12 @@ def api_toggle_bot_state():
         msg = f"Target {target.upper()} has been set to {state_text}."
     return jsonify({'status': 'success', 'message': msg})
 
+# Endpoint để client có thể yêu cầu lưu cài đặt ngay lập tức
+@app.route("/api/save_settings", methods=['POST'])
+def api_save_settings():
+    save_settings()
+    return jsonify({'status': 'success', 'message': 'Settings saved.'})
+
 @app.route("/status")
 def status():
     now = time.time()
@@ -568,20 +609,18 @@ def status():
     
     return jsonify({
         'reboot_enabled': auto_reboot_enabled, 'reboot_countdown': reboot_countdown,
-        'auto_reboot_delay': auto_reboot_delay,
         'spam_enabled': spam_enabled, 'spam_countdown': spam_countdown,
-        'spam_message': spam_message,
-        'spam_delay': spam_delay,
         'bot_statuses': bot_statuses,
         'server_start_time': server_start_time,
-        'grab_status': "active" if auto_grab_enabled else "inactive", 'grab_text': "ON" if auto_grab_enabled else "OFF", 'grab_action': "DISABLE" if auto_grab_enabled else "ENABLE", 'heart_threshold': heart_threshold,
-        'grab_status_2': "active" if auto_grab_enabled_2 else "inactive", 'grab_text_2': "ON" if auto_grab_enabled_2 else "OFF", 'grab_action_2': "DISABLE" if auto_grab_enabled_2 else "ENABLE", 'heart_threshold_2': heart_threshold_2,
-        'grab_status_3': "active" if auto_grab_enabled_3 else "inactive", 'grab_text_3': "ON" if auto_grab_enabled_3 else "OFF", 'grab_action_3': "DISABLE" if auto_grab_enabled_3 else "ENABLE", 'heart_threshold_3': heart_threshold_3,
+        'grab_status': "active" if auto_grab_enabled else "inactive", 'grab_text': "ON" if auto_grab_enabled else "OFF", 'grab_action': "DISABLE" if auto_grab_enabled else "ENABLE",
+        'grab_status_2': "active" if auto_grab_enabled_2 else "inactive", 'grab_text_2': "ON" if auto_grab_enabled_2 else "OFF", 'grab_action_2': "DISABLE" if auto_grab_enabled_2 else "ENABLE",
+        'grab_status_3': "active" if auto_grab_enabled_3 else "inactive", 'grab_text_3': "ON" if auto_grab_enabled_3 else "OFF", 'grab_action_3': "DISABLE" if auto_grab_enabled_3 else "ENABLE",
     })
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    load_settings() # Tải cài đặt khi khởi động
+    load_settings() # TẢI CÀI ĐẶT KHI KHỞI ĐỘNG
+    
     print("Đang khởi tạo các bot...", flush=True)
     with bots_lock:
         if main_token: 
@@ -604,16 +643,10 @@ if __name__ == "__main__":
                 bots.append(create_bot(token.strip()))
                 if f'sub_{i}' not in bot_active_states:
                     bot_active_states[f'sub_{i}'] = True
-    
-    # Lưu lại trạng thái ban đầu một lần (quan trọng)
-    save_settings() 
-    
-    print("Đang khởi tạo các luồng nền...", flush=True)
 
-    # Bắt đầu luồng lưu định kỳ
-    threading.Thread(target=periodic_save_loop, daemon=True).start()
+    print("Đang khởi tạo các luồng nền...", flush=True)
+    threading.Thread(target=periodic_save_loop, daemon=True).start() # BẮT ĐẦU LUỒNG LƯU ĐỊNH KỲ
     
-    # Khởi động các luồng tính năng
     if spam_thread is None or not spam_thread.is_alive():
         spam_thread = threading.Thread(target=spam_loop, daemon=True)
         spam_thread.start()
