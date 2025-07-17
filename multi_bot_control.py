@@ -38,6 +38,7 @@ bots_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
 
+
 # --- HÀM LƯU VÀ TẢI CÀI ĐẶT (ĐƯỢC THÊM VÀO) ---
 def save_settings():
     """Lưu cài đặt lên JSONBin.io"""
@@ -67,7 +68,7 @@ def save_settings():
         print(f"[Settings] Exception khi lưu: {e}", flush=True)
 
 def load_settings():
-    """Tải cài đặt từ JSONBin.io"""
+    """Tải cài đặt từ JSONBin.io và tự động bật lại tính năng"""
     try:
         api_key = os.getenv("JSONBIN_API_KEY")
         bin_id = os.getenv("JSONBIN_BIN_ID")
@@ -80,6 +81,13 @@ def load_settings():
             if settings: 
                 globals().update(settings)
                 print("[Settings] Đã tải cài đặt từ JSONBin.", flush=True)
+
+                # Logic tự động bật lại các tính năng chính
+                print("[System] Kích hoạt lại các tính năng tự động sau khi khởi động...", flush=True)
+                globals()['auto_grab_enabled'] = True
+                globals()['auto_grab_enabled_2'] = True
+                globals()['auto_grab_enabled_3'] = True
+
     except Exception: pass
 
 def periodic_save_loop():
@@ -573,6 +581,7 @@ def status():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
+    load_settings() # Tải cài đặt khi khởi động
     print("Đang khởi tạo các bot...", flush=True)
     with bots_lock:
         if main_token: 
@@ -595,8 +604,16 @@ if __name__ == "__main__":
                 bots.append(create_bot(token.strip()))
                 if f'sub_{i}' not in bot_active_states:
                     bot_active_states[f'sub_{i}'] = True
-
+    
+    # Lưu lại trạng thái ban đầu một lần (quan trọng)
+    save_settings() 
+    
     print("Đang khởi tạo các luồng nền...", flush=True)
+
+    # Bắt đầu luồng lưu định kỳ
+    threading.Thread(target=periodic_save_loop, daemon=True).start()
+    
+    # Khởi động các luồng tính năng
     if spam_thread is None or not spam_thread.is_alive():
         spam_thread = threading.Thread(target=spam_loop, daemon=True)
         spam_thread.start()
