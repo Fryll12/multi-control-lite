@@ -38,7 +38,7 @@ bots_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
 
-# --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
+# --- HÀM LƯU VÀ TẢI CÀI ĐẶT (ĐƯỢC THÊM VÀO) ---
 def save_settings():
     """Lưu cài đặt lên JSONBin.io"""
     api_key = os.getenv("JSONBIN_API_KEY")
@@ -85,11 +85,11 @@ def load_settings():
 def periodic_save_loop():
     """Vòng lặp nền để tự động lưu cài đặt 10 tiếng một lần."""
     while True:
-        time.sleep(40000) # 36000 giây = 10 tiếng
+        time.sleep(36000) # 36000 giây = 10 tiếng
         print("[Settings] Bắt đầu lưu định kỳ...", flush=True)
         save_settings()
 
-# --- CÁC HÀM LOGIC BOT ---
+# --- CÁC HÀM LOGIC BOT (KHÔNG THAY ĐỔI) ---
 def reboot_bot(target_id):
     global main_bot, main_bot_2, main_bot_3
     with bots_lock:
@@ -143,7 +143,13 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                             if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                                 desc = msg_item["embeds"][0].get("description", "")
                                 lines = desc.split('\n')
-                                heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines[:3]]
+                                heart_numbers = []
+                                for line in lines[:3]:
+                                    match = re.search(r'♡(\d+)', line)
+                                    if match:
+                                        heart_numbers.append(int(match.group(1)))
+                                    else:
+                                        heart_numbers.append(0)
                                 max_num = max(heart_numbers)
                                 if sum(heart_numbers) > 0 and max_num >= heart_threshold:
                                     max_index = heart_numbers.index(max_num)
@@ -151,7 +157,8 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                     print(f"[Bot 1] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                                     def grab():
                                         bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1); bot.sendMessage(ktb_channel_id, "kt b")
+                                        time.sleep(1)
+                                        bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab).start()
                                 break
                     except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 1): {e}", flush=True)
@@ -168,7 +175,13 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                             if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                                 desc = msg_item["embeds"][0].get("description", "")
                                 lines = desc.split('\n')
-                                heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines[:3]]
+                                heart_numbers = []
+                                for line in lines[:3]:
+                                    match = re.search(r'♡(\d+)', line)
+                                    if match:
+                                        heart_numbers.append(int(match.group(1)))
+                                    else:
+                                        heart_numbers.append(0)
                                 max_num = max(heart_numbers)
                                 if sum(heart_numbers) > 0 and max_num >= heart_threshold_2:
                                     max_index = heart_numbers.index(max_num)
@@ -176,7 +189,8 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                     print(f"[Bot 2] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                                     def grab_2():
                                         bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1); bot.sendMessage(ktb_channel_id, "kt b")
+                                        time.sleep(1)
+                                        bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab_2).start()
                                 break
                     except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 2): {e}", flush=True)
@@ -193,7 +207,13 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                             if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                                 desc = msg_item["embeds"][0].get("description", "")
                                 lines = desc.split('\n')
-                                heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines[:3]]
+                                heart_numbers = []
+                                for line in lines[:3]:
+                                    match = re.search(r'♡(\d+)', line)
+                                    if match:
+                                        heart_numbers.append(int(match.group(1)))
+                                    else:
+                                        heart_numbers.append(0)
                                 max_num = max(heart_numbers)
                                 if sum(heart_numbers) > 0 and max_num >= heart_threshold_3:
                                     max_index = heart_numbers.index(max_num)
@@ -201,7 +221,8 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
                                     print(f"[Bot 3] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                                     def grab_3():
                                         bot.addReaction(main_channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1); bot.sendMessage(ktb_channel_id, "kt b")
+                                        time.sleep(1)
+                                        bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab_3).start()
                                 break
                     except Exception as e: print(f"Lỗi khi đọc tin nhắn (Bot 3): {e}", flush=True)
@@ -210,7 +231,7 @@ def create_bot(token, is_main=False, is_main_2=False, is_main_3=False):
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN ---
+# --- CÁC VÒNG LẶP NỀN (KHÔNG THAY ĐỔI) ---
 def auto_reboot_loop():
     global last_reboot_cycle_time
     while not auto_reboot_stop_event.is_set():
@@ -250,7 +271,7 @@ def spam_loop():
 
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB ---
+# --- GIAO DIỆN WEB (KHÔNG THAY ĐỔI) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -272,7 +293,8 @@ HTML_TEMPLATE = """
         .panel h2 i { margin-right: 10px; }
         .btn { background: var(--secondary-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; }
         .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
-        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; font-family: 'Courier Prime', monospace; }
+        .input-group label { padding: 10px; background: #000; border: 1px solid var(--border-color); border-right: none; border-radius: 4px 0 0 4px; }
+        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
         .grab-section { margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
         .grab-section h3 { margin-top:0; display: flex; justify-content: space-between; align-items: center;}
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
@@ -375,20 +397,26 @@ HTML_TEMPLATE = """
                 updateElement('reboot-timer', { textContent: formatTime(data.reboot_countdown) });
                 updateElement('reboot-status-badge', { textContent: data.reboot_enabled ? 'ON' : 'OFF', className: `status-badge ${data.reboot_enabled ? 'active' : 'inactive'}` });
                 updateElement('auto-reboot-toggle-btn', { textContent: `${data.reboot_enabled ? 'DISABLE' : 'ENABLE'} AUTO REBOOT`});
+                updateElement('auto-reboot-delay', { value: data.auto_reboot_delay });
 
                 updateElement('spam-timer', { textContent: formatTime(data.spam_countdown) });
                 updateElement('spam-status-badge', { textContent: data.spam_enabled ? 'ON' : 'OFF', className: `status-badge ${data.spam_enabled ? 'active' : 'inactive'}` });
                 updateElement('spam-toggle-btn', { textContent: `${data.spam_enabled ? 'DISABLE' : 'ENABLE'} SPAM`});
+                updateElement('spam-message', { value: data.spam_message });
+                updateElement('spam-delay', { value: data.spam_delay });
 
                 const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
                 updateElement('uptime-timer', { textContent: formatTime(serverUptimeSeconds) });
                 
                 updateElement('harvest-status-1', { textContent: data.grab_text, className: `status-badge ${data.grab_status}` });
                 updateElement('harvest-toggle-1', { textContent: data.grab_action });
+                updateElement('heart-threshold-1', { value: data.heart_threshold });
                 updateElement('harvest-status-2', { textContent: data.grab_text_2, className: `status-badge ${data.grab_status_2}` });
                 updateElement('harvest-toggle-2', { textContent: data.grab_action_2 });
+                updateElement('heart-threshold-2', { value: data.heart_threshold_2 });
                 updateElement('harvest-status-3', { textContent: data.grab_text_3, className: `status-badge ${data.grab_status_3}` });
                 updateElement('harvest-toggle-3', { textContent: data.grab_action_3 });
+                updateElement('heart-threshold-3', { value: data.heart_threshold_3 });
                 
                 const listContainer = document.getElementById('bot-status-list');
                 listContainer.innerHTML = ''; 
@@ -532,12 +560,15 @@ def status():
     
     return jsonify({
         'reboot_enabled': auto_reboot_enabled, 'reboot_countdown': reboot_countdown,
+        'auto_reboot_delay': auto_reboot_delay,
         'spam_enabled': spam_enabled, 'spam_countdown': spam_countdown,
+        'spam_message': spam_message,
+        'spam_delay': spam_delay,
         'bot_statuses': bot_statuses,
         'server_start_time': server_start_time,
-        'grab_status': "active" if auto_grab_enabled else "inactive", 'grab_text': "ON" if auto_grab_enabled else "OFF", 'grab_action': "DISABLE" if auto_grab_enabled else "ENABLE",
-        'grab_status_2': "active" if auto_grab_enabled_2 else "inactive", 'grab_text_2': "ON" if auto_grab_enabled_2 else "OFF", 'grab_action_2': "DISABLE" if auto_grab_enabled_2 else "ENABLE",
-        'grab_status_3': "active" if auto_grab_enabled_3 else "inactive", 'grab_text_3': "ON" if auto_grab_enabled_3 else "OFF", 'grab_action_3': "DISABLE" if auto_grab_enabled_3 else "ENABLE",
+        'grab_status': "active" if auto_grab_enabled else "inactive", 'grab_text': "ON" if auto_grab_enabled else "OFF", 'grab_action': "DISABLE" if auto_grab_enabled else "ENABLE", 'heart_threshold': heart_threshold,
+        'grab_status_2': "active" if auto_grab_enabled_2 else "inactive", 'grab_text_2': "ON" if auto_grab_enabled_2 else "OFF", 'grab_action_2': "DISABLE" if auto_grab_enabled_2 else "ENABLE", 'heart_threshold_2': heart_threshold_2,
+        'grab_status_3': "active" if auto_grab_enabled_3 else "inactive", 'grab_text_3': "ON" if auto_grab_enabled_3 else "OFF", 'grab_action_3': "DISABLE" if auto_grab_enabled_3 else "ENABLE", 'heart_threshold_3': heart_threshold_3,
     })
 
 # --- MAIN EXECUTION ---
