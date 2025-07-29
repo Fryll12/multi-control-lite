@@ -265,7 +265,7 @@ def spam_for_server(server_config, stop_event):
     while not stop_event.is_set():
         try:
             with bots_lock:
-                active_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
+                active_bots = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
             
             delay = server_config.get('spam_delay', 10)
             for bot in active_bots:
