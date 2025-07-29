@@ -326,9 +326,24 @@ HTML_TEMPLATE = """
         .add-server-btn { display: flex; align-items: center; justify-content: center; min-height: 200px; border: 2px dashed var(--border-color); cursor: pointer; transition: all 0.3s ease; }
         .add-server-btn:hover { background: var(--secondary-bg); border-color: var(--blood-red); }
         .add-server-btn i { font-size: 3rem; color: var(--text-secondary); }
-        .btn-delete-server { position: absolute; top: 15px; right: 15px; background: var(--dark-red); border: 1px solid var(--blood-red); color: var(--bone-white); width: auto; padding: 5px 10px; border-radius: 8px; }
         .server-sub-panel { border-top: 1px solid var(--border-color); margin-top: 20px; padding-top: 20px;}
         .flex-row { display:flex; gap: 10px; align-items: center;}
+
+        /* === PHONG CÁCH MÀU HỒNG CHO SERVER PANEL === */
+        .server-panel {
+            border-color: #FF69B4 !important; /* Màu viền hồng */
+            box-shadow: 0 0 20px rgba(255, 105, 180, 0.4); /* Đổ bóng màu hồng */
+        }
+        .server-panel h2 {
+            color: #FF1493 !important; /* Màu tiêu đề hồng đậm */
+            border-color: #FFD700 !important; /* Màu gạch chân vàng */
+            font-family: 'Nosifer', cursive;
+        }
+        .btn-delete-server {
+             position: absolute; top: 15px; right: 15px; background: var(--dark-red);
+             border: 1px solid var(--blood-red); color: var(--bone-white);
+             width: 30px; height: 30px; border-radius: 50%; padding: 0; line-height:30px; text-align:center;
+        }
     </style>
 </head>
 <body>
@@ -426,7 +441,7 @@ HTML_TEMPLATE = """
                 showStatusMessage(result.message, result.status !== 'success');
                 if (result.status === 'success') {
                     if (result.reload) { setTimeout(() => window.location.reload(), 500); }
-                    else { setTimeout(fetchStatus, 500); } // Refresh status after successful action
+                    else { setTimeout(fetchStatus, 500); }
                 }
                 return result;
             } catch (error) { console.error('Error:', error); showStatusMessage('Server communication error.', true); }
@@ -480,12 +495,11 @@ HTML_TEMPLATE = """
                         updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
                     });
                     updateElement(serverPanel.querySelector('.broadcast-toggle'), { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
-                    // Note: Spam timer is not implemented in this version to reduce complexity
                 });
             } catch (error) { console.error('Error fetching status:', error); }
         }
         
-        setInterval(fetchStatus, 2000); // Refresh every 2 seconds
+        setInterval(fetchStatus, 2000);
         
         document.body.addEventListener('click', e => {
             const button = e.target.closest('button');
