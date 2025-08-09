@@ -1,726 +1,757 @@
-# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG
 import discum
-import threading
 import time
-import os
-import re
-import requests
+import threading
 import json
-from flask import Flask, request, render_template_string, jsonify
-from dotenv import load_dotenv
-import uuid
+import random
+import requests
+import os
+import sys
+from collections import deque
+from flask import Flask, jsonify, render_template_string, request
 
-load_dotenv()
+# ===================================================================
+# CẤU HÌNH VÀ BIẾN TOÀN CỤC
+# ===================================================================
 
-# --- CẤU HÌNH ---
-main_tokens = os.getenv("MAIN_TOKENS").split(",") if os.getenv("MAIN_TOKENS") else []
-tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
-karuta_id = "646937666251915264"
-karibbit_id = "1311684840462225440"
-BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
-    "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON",
-    "ZETA", "ETA", "THETA", "IOTA", "KAPPA",
-    "LAMBDA", "MU"
-]
+# --- Lấy cấu hình từ biến môi trường ---
+TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+KD_CHANNEL_ID = os.getenv("KD_CHANNEL_ID")  # THÊM MỚI
+KARUTA_ID = "646937666251915264"
 
-# --- BIẾN TRẠNG THÁI ---
-bots, acc_names = [], [
-    "Blacklist", "Khanh bang", "Dersale", "Venus", "WhyK", "Tan",
-    "Ylang", "Nina", "Nathan", "Ofer", "White", "the Wicker", "Leader", "Tess", "Wyatt", "Daisy", "CantStop", "Token",
-]
-main_bots = []
-servers = []
-watermelon_grab_states = {} # Cài đặt nhặt dưa hấu toàn cục
+# --- Kiểm tra biến môi trường ---
+if not TOKEN:
+    print("LỖI: Vui lòng cung cấp DISCORD_TOKEN trong biến môi trường.", flush=True)
+    sys.exit(1)
 
-# Cài đặt toàn cục
-auto_reboot_enabled = False
-auto_reboot_delay = 3600
-last_reboot_cycle_time = 0
+if not CHANNEL_ID:
+    print("LỖI: Vui lòng cung cấp CHANNEL_ID trong biến môi trường.", flush=True)
+    sys.exit(1)
 
-# Các biến điều khiển luồng
-auto_reboot_stop_event = threading.Event()
-spam_thread, auto_reboot_thread = None, None
-bots_lock = threading.Lock()
-server_start_time = time.time()
-bot_active_states = {}
+# KD_CHANNEL_ID là tùy chọn, chỉ cảnh báo
+if not KD_CHANNEL_ID:
+    print("CẢNH BÁO: KD_CHANNEL_ID chưa được cấu hình. Tính năng Auto KD sẽ không khả dụng.", flush=True)
 
-# --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
-def save_settings():
-    api_key = os.getenv("JSONBIN_API_KEY")
-    bin_id = os.getenv("JSONBIN_BIN_ID")
-    if not api_key or not bin_id: return
-    settings = {
-        'servers': servers,
-        'auto_reboot_enabled': auto_reboot_enabled,
-        'auto_reboot_delay': auto_reboot_delay,
-        'bot_active_states': bot_active_states,
-        'last_reboot_cycle_time': last_reboot_cycle_time,
-        'watermelon_grab_states': watermelon_grab_states
-    }
-    headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
-    url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+# --- Các biến trạng thái và điều khiển ---
+lock = threading.RLock()
+
+# Bot Event
+event_bot_thread = None
+event_bot_instance = None
+is_event_bot_running = False
+
+# Vòng lặp tự động
+hourly_loop_thread = None
+is_hourly_loop_enabled = False
+loop_delay_seconds = 3600
+
+# Auto Click
+autoclick_bot_thread = None
+autoclick_bot_instance = None
+is_autoclick_running = False
+autoclick_button_index = 0
+autoclick_count = 0
+autoclick_clicks_done = 0
+autoclick_target_message_data = None
+
+# Auto KD (THÊM MỚI)
+auto_kd_thread = None
+auto_kd_instance = None
+is_auto_kd_running = False
+
+# Spam
+spam_panels = []
+panel_id_counter = 0
+spam_thread = None
+
+
+# ===================================================================
+# HÀM CLICK BUTTON (DÙNG CHUNG)
+# ===================================================================
+
+def click_button_by_index(bot, message_data, index, source=""):
+    """
+    Hàm chung để click vào một button trên tin nhắn dựa vào vị trí (index).
+    FIX: Đã khôi phục vòng lặp thử lại 40 lần.
+    """
     try:
-        req = requests.put(url, json=settings, headers=headers, timeout=10)
-        if req.status_code == 200: print("[Settings] Đã lưu cài đặt lên JSONBin.io thành công.", flush=True)
-        else: print(f"[Settings] Lỗi khi lưu cài đặt: {req.status_code} - {req.text}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
+        if not bot or not bot.gateway.session_id:
+            print(f"[{source}] LỖI: Bot chưa kết nối hoặc không có session_id. Không thể click.", flush=True)
+            return False
 
-def load_settings():
-    global servers, auto_reboot_enabled, auto_reboot_delay, bot_active_states, last_reboot_cycle_time, watermelon_grab_states
-    api_key = os.getenv("JSONBIN_API_KEY")
-    bin_id = os.getenv("JSONBIN_BIN_ID")
-    if not api_key or not bin_id:
-        print("[Settings] Thiếu API Key hoặc Bin ID. Sử dụng cài đặt mặc định.", flush=True)
-        return
-    headers = {'X-Master-Key': api_key}
-    url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
-    try:
-        req = requests.get(url, headers=headers, timeout=10)
-        if req.status_code == 200:
-            settings = req.json().get("record", {})
-            if settings:
-                servers.extend(settings.get('servers', []))
-                auto_reboot_enabled = settings.get('auto_reboot_enabled', False)
-                auto_reboot_delay = settings.get('auto_reboot_delay', 3600)
-                bot_active_states = settings.get('bot_active_states', {})
-                last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
-                watermelon_grab_states = settings.get('watermelon_grab_states', {})
-                print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
-            else:
-                print("[Settings] JSONBin rỗng, bắt đầu với cài đặt mặc định và lưu lại.", flush=True)
-                save_settings()
-        else: print(f"[Settings] Lỗi khi tải cài đặt: {req.status_code} - {req.text}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
+        application_id = message_data.get("application_id", KARUTA_ID)
 
-# --- CÁC HÀM LOGIC BOT ---
-def handle_grab(bot, msg, bot_num):
-    channel_id = msg.get("channel_id")
-    target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-    if not target_server: return
+        rows = [comp['components'] for comp in message_data.get('components', []) if 'components' in comp]
+        all_buttons = [button for row in rows for button in row]
+        if index >= len(all_buttons):
+            print(f"[{source}] LỖI: Không tìm thấy button ở vị trí {index}", flush=True)
+            return False
 
-    # Cài đặt nhặt thẻ vẫn theo từng server
-    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
-    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-    ktb_channel_id = target_server.get('ktb_channel_id')
-    
-    # Cài đặt nhặt dưa hấu được lấy từ biến toàn cục
-    watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
+        button_to_click = all_buttons[index]
+        custom_id = button_to_click.get("custom_id")
+        if not custom_id: return False
 
-    # Chỉ xử lý khi có ít nhất một chức năng được bật
-    if not auto_grab_enabled and not watermelon_grab_enabled:
-        return
-
-    if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
-        last_drop_msg_id = msg["id"]
+        headers = {"Authorization": TOKEN}
         
-        def grab_handler():
-            card_picked = False
-            
-            # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim (nếu được bật) ---
-            if auto_grab_enabled and ktb_channel_id:
-                for _ in range(6):
-                    time.sleep(0.5)
-                    try:
-                        messages = bot.getMessages(channel_id, num=5).json()
-                        for msg_item in messages:
-                            if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
-                                if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                    desc = msg_item["embeds"][0].get("description", "")
-                                    if '♡' not in desc: continue
-                                    lines = desc.split('\n')
-                                    heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                                    if not any(heart_numbers): break 
-                                    max_num = max(heart_numbers)
-                                    if max_num >= heart_threshold:
-                                        max_index = heart_numbers.index(max_num)
-                                        delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
-                                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                                        emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                                        emoji = emojis[max_index]
-                                        delay = bot_delays[max_index]
-                                        log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
-                                        print(log_message, flush=True)
-                                        def grab_action():
-                                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                            time.sleep(1)
-                                            bot.sendMessage(ktb_channel_id, "kt b")
-                                        threading.Timer(delay, grab_action).start()
-                                        card_picked = True
-                                if card_picked: break
-                        if card_picked: break
-                    except Exception as e:
-                        print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
-                    if card_picked: break
+        # FIX: Khôi phục vòng lặp thử lại 40 lần
+        max_retries = 40
+        for attempt in range(max_retries):
+            session_id = bot.gateway.session_id
+            payload = {
+                "type": 3, "guild_id": message_data.get("guild_id"),
+                "channel_id": message_data.get("channel_id"), "message_id": message_data.get("id"),
+                "application_id": application_id,
+                "session_id": session_id,
+                "data": {"component_type": 2, "custom_id": custom_id}
+            }
 
-            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (NẾU ĐƯỢC BẬT TOÀN CỤC) ---
-            if watermelon_grab_enabled:
-                try:
-                    time.sleep(0.25)
-                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                        full_msg_obj = full_msg_obj[0]
-                    if 'reactions' in full_msg_obj:
-                        for reaction in full_msg_obj['reactions']:
-                            if reaction['emoji']['name'] == '🍉':
-                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                break 
-                except Exception as e:
-                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+            emoji_name = button_to_click.get('emoji', {}).get('name', 'Không có')
+            print(f"[{source}] INFO (Lần {attempt + 1}/{max_retries}): Chuẩn bị click button ở vị trí {index} (Emoji: {emoji_name})", flush=True)
 
-        threading.Thread(target=grab_handler).start()
+            try:
+                r = requests.post("https://discord.com/api/v9/interactions", headers=headers, json=payload, timeout=10)
+                if 200 <= r.status_code < 300:
+                    print(f"[{source}] INFO: Click thành công! (Status: {r.status_code})", flush=True)
+                    time.sleep(random.uniform(2.5, 3.5))
+                    return True # Thoát khỏi hàm nếu thành công
+                elif r.status_code == 429:
+                    retry_after = r.json().get("retry_after", 1.5)
+                    print(f"[{source}] WARN: Bị rate limit! Sẽ thử lại sau {retry_after:.2f} giây...", flush=True)
+                    time.sleep(retry_after)
+                else:
+                    print(f"[{source}] LỖI: Click thất bại! (Status: {r.status_code}, Response: {r.text})", flush=True)
+                    # Không thoát ngay, để vòng lặp thử lại
+                    time.sleep(2) # Chờ 1 chút trước khi thử lại
+            except requests.exceptions.RequestException as e:
+                print(f"[{source}] LỖI KẾT NỐI: {e}. Sẽ thử lại sau 3 giây...", flush=True)
+                time.sleep(3)
+        
+        print(f"[{source}] LỖI: Đã thử click {max_retries} lần mà không thành công.", flush=True)
+        return False # Trả về False sau khi hết số lần thử
+        
+    except Exception as e:
+        print(f"[{source}] LỖI NGOẠI LỆ trong hàm click_button_by_index: {e}", flush=True)
+        return False
 
-def create_bot(token, bot_identifier, is_main=False):
-    bot = discum.Client(token=token, log=False)
+# ===================================================================
+# LOGIC BOT EVENT (CHẾ ĐỘ 1)
+# ===================================================================
+def run_event_bot_thread():
+    """Chạy bot tự động chơi event phức tạp."""
+    global is_event_bot_running, event_bot_instance
     
+    active_message_id = None
+    action_queue = deque()
+    bot = discum.Client(token=TOKEN, log=False)
+    
+    with lock:
+        event_bot_instance = bot
+
+    def perform_final_confirmation(message_data):
+        print("[EVENT BOT] ACTION: Chờ 2 giây để nút xác nhận cuối cùng load...", flush=True)
+        time.sleep(2)
+        click_button_by_index(bot, message_data, 2, "EVENT BOT")
+        print("[EVENT BOT] INFO: Đã hoàn thành lượt. Chờ game tự động cập nhật để bắt đầu lượt mới...", flush=True)
+
+    @bot.gateway.command
+    def on_message(resp):
+        nonlocal active_message_id, action_queue
+        with lock:
+            if not is_event_bot_running:
+                bot.gateway.close()
+                return
+        
+        if not (resp.event.message or resp.event.message_updated): return
+        m = resp.parsed.auto()
+        if not (m.get("author", {}).get("id") == KARUTA_ID and m.get("channel_id") == CHANNEL_ID): return
+        
+        with lock:
+            if resp.event.message and "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", ""):
+                active_message_id = m.get("id")
+                action_queue.clear()
+                print(f"\n[EVENT BOT] INFO: Đã phát hiện game mới. Chuyển sang tin nhắn ID: {active_message_id}", flush=True)
+
+            if m.get("id") != active_message_id: return
+
+        embed_desc = m.get("embeds", [{}])[0].get("description", "")
+        all_buttons_flat = [b for row in m.get('components', []) for b in row.get('components', []) if row.get('type') == 1]
+        is_movement_phase = any(b.get('emoji', {}).get('name') == '▶️' for b in all_buttons_flat)
+        is_final_confirm_phase = any(b.get('emoji', {}).get('name') == '❌' for b in all_buttons_flat)
+        found_good_move = "If placed here, you will receive the following fruit:" in embed_desc
+        has_received_fruit = "You received the following fruit:" in embed_desc
+
+        if is_final_confirm_phase:
+            with lock: action_queue.clear() 
+            threading.Thread(target=perform_final_confirmation, args=(m,)).start()
+        elif has_received_fruit:
+            threading.Thread(target=click_button_by_index, args=(bot, m, 0, "EVENT BOT")).start()
+        elif is_movement_phase:
+            with lock:
+                if found_good_move:
+                    print("[EVENT BOT] INFO: NGẮT QUÃNG - Phát hiện nước đi có kết quả. Xác nhận ngay.", flush=True)
+                    action_queue.clear()
+                    action_queue.append(0)
+                elif not action_queue:
+                    print("[EVENT BOT] INFO: Bắt đầu lượt mới. Tạo chuỗi hành động...", flush=True)
+                    fixed_sequence = [1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 1, 1, 1, 1, 2, 2, 3, 3]
+                    action_queue.extend(fixed_sequence)
+                    random_sequence = [random.choice([1,2,3,4]) for _ in range(random.randint(4, 12))]
+                    action_queue.extend(random_sequence)
+                    action_queue.append(0)
+                    print(f"[EVENT BOT] INFO: Chuỗi hành động mới có tổng cộng {len(action_queue)} bước.", flush=True)
+
+                if action_queue:
+                    next_action_index = action_queue.popleft()
+                    threading.Thread(target=click_button_by_index, args=(bot, m, next_action_index, "EVENT BOT")).start()
+
+    @bot.gateway.command
+    def on_ready(resp):
+        if resp.event.ready_supplemental:
+            print("[EVENT BOT] Gateway đã sẵn sàng. Gửi lệnh 'kevent' đầu tiên...", flush=True)
+            bot.sendMessage(CHANNEL_ID, "kevent")
+
+    print("[EVENT BOT] Luồng bot sự kiện đã khởi động, đang kết nối gateway...", flush=True)
+    bot.gateway.run(auto_reconnect=True)
+    with lock:
+        is_event_bot_running = False
+    print("[EVENT BOT] Luồng bot sự kiện đã dừng.", flush=True)
+
+# ===================================================================
+# LOGIC AUTO CLICK (CHẾ ĐỘ 2)
+# ===================================================================
+def run_autoclick_bot_thread():
+    """Chạy bot chỉ để auto click, tách biệt hoàn toàn."""
+    global is_autoclick_running, autoclick_bot_instance, autoclick_clicks_done, autoclick_target_message_data
+
+    bot = discum.Client(token=TOKEN, log=False)
+    with lock:
+        autoclick_bot_instance = bot
+
+    @bot.gateway.command
+    def on_message(resp):
+        """Lắng nghe và LƯU TRỮ toàn bộ dữ liệu tin nhắn game mới."""
+        global autoclick_target_message_data
+        with lock:
+            if not is_autoclick_running:
+                bot.gateway.close()
+                return
+
+        if resp.event.message or resp.event.message_updated:
+            m = resp.parsed.auto()
+            if (m.get("author", {}).get("id") == KARUTA_ID and
+                m.get("channel_id") == CHANNEL_ID and
+                "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", "")):
+                with lock:
+                    autoclick_target_message_data = m
+                print(f"[AUTO CLICK] INFO: Đã phát hiện/cập nhật tin nhắn game. Mục tiêu mới: {m.get('id')}", flush=True)
+
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
-            user = resp.raw.get("user", {})
-            if isinstance(user, dict) and (user_id := user.get("id")):
-                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
-                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
+            print("[AUTO CLICK] Gateway đã sẵn sàng. Đang chờ bạn gõ 'kevent'...", flush=True)
 
-    if is_main:
-        @bot.gateway.command
-        def on_message(resp):
-            if resp.event.message:
-                handle_grab(bot, resp.parsed.auto(), bot_identifier)
+    threading.Thread(target=bot.gateway.run, daemon=True, name="AutoClickGatewayThread").start()
+    print("[AUTO CLICK] Luồng auto click đã khởi động.", flush=True)
+    
+    while True:
+        with lock:
+            if not is_autoclick_running: break
+            if autoclick_count > 0 and autoclick_clicks_done >= autoclick_count:
+                print("[AUTO CLICK] INFO: Đã hoàn thành số lần click được yêu cầu.", flush=True)
+                break
             
-    threading.Thread(target=bot.gateway.run, daemon=True).start()
-    return bot
+            target_data = autoclick_target_message_data
 
-# --- CÁC VÒNG LẶP NỀN ---
-def auto_reboot_loop():
-    global last_reboot_cycle_time, main_bots
-    while not auto_reboot_stop_event.is_set():
-        try:
-            if auto_reboot_stop_event.wait(timeout=60): break
-            if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
-                print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
-                with bots_lock:
-                    new_main_bots = []
-                    for i, bot in enumerate(main_bots):
-                        bot.gateway.close()
-                        time.sleep(2)
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
-                        new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
-                        time.sleep(5)
-                    main_bots = new_main_bots
-                last_reboot_cycle_time = time.time()
-                save_settings()
-        except Exception as e:
-            print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
-            time.sleep(60)
-    print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
+        if target_data:
+            # Không cần try/except ở đây vì hàm click đã xử lý rồi
+            if click_button_by_index(bot, target_data, autoclick_button_index, "AUTO CLICK"):
+                with lock:
+                    autoclick_clicks_done += 1
+            else:
+                # Nếu hàm click trả về False sau 40 lần thử, có thể dừng hoặc báo lỗi
+                print("[AUTO CLICK] LỖI NGHIÊM TRỌNG: Không thể click sau nhiều lần thử. Dừng auto click.", flush=True)
+                break # Thoát khỏi vòng lặp while
+        else:
+            print("[AUTO CLICK] WARN: Chưa có tin nhắn event nào được phát hiện. Đang chờ...", flush=True)
+            time.sleep(5)
+
+    with lock:
+        is_autoclick_running = False
+        autoclick_bot_instance = None
+    print("[AUTO CLICK] Luồng auto click đã dừng.", flush=True)
+
+# ===================================================================
+# LOGIC AUTO KD (TÍNH NĂNG MỚI)
+# ===================================================================
+def run_auto_kd_thread():
+    """Chạy bot tự động gửi kd khi phát hiện blessing activated."""
+    global is_auto_kd_running, auto_kd_instance
+    
+    if not KD_CHANNEL_ID:
+        print("[AUTO KD] LỖI: Chưa cấu hình KD_CHANNEL_ID trong biến môi trường.", flush=True)
+        with lock:
+            is_auto_kd_running = False
+        return
+    
+    bot = discum.Client(token=TOKEN, log=False)
+    
+    with lock:
+        auto_kd_instance = bot
+
+    @bot.gateway.command
+    def on_message(resp):
+        with lock:
+            if not is_auto_kd_running:
+                bot.gateway.close()
+                return
+        
+        if not resp.event.message:
+            return
+            
+        m = resp.parsed.auto()
+        
+        # Kiểm tra nếu tin nhắn từ Karuta trong KD channel
+        if (m.get("author", {}).get("id") == KARUTA_ID and 
+            m.get("channel_id") == KD_CHANNEL_ID):
+            
+            message_content = m.get("content", "").lower()
+            embed_description = ""
+            
+            # Kiểm tra cả content và embed description
+            embeds = m.get("embeds", [])
+            if embeds and len(embeds) > 0:
+                embed_description = embeds[0].get("description", "").lower()
+            
+            # Tìm từ khóa "blessing has activated!"
+            if ("blessing has activated!" in message_content or 
+                "blessing has activated!" in embed_description):
+                
+                print("[AUTO KD] INFO: Phát hiện blessing activated! Đang gửi lệnh kd...", flush=True)
+                
+                # Gửi lệnh kd với delay ngẫu nhiên để tránh spam
+                delay = random.uniform(1.5, 3.0)
+                time.sleep(delay)
+                
+                try:
+                    bot.sendMessage(KD_CHANNEL_ID, "kd")
+                    print(f"[AUTO KD] SUCCESS: Đã gửi lệnh kd sau {delay:.1f} giây delay.", flush=True)
+                except Exception as e:
+                    print(f"[AUTO KD] LỖI: Không thể gửi lệnh kd. {e}", flush=True)
+
+    @bot.gateway.command
+    def on_ready(resp):
+        if resp.event.ready:
+            print(f"[AUTO KD] Gateway đã sẵn sàng. Đang theo dõi kênh {KD_CHANNEL_ID}...", flush=True)
+
+    print("[AUTO KD] Luồng Auto KD đã khởi động, đang kết nối gateway...", flush=True)
+    bot.gateway.run(auto_reconnect=True)
+    
+    with lock:
+        is_auto_kd_running = False
+        auto_kd_instance = None
+    print("[AUTO KD] Luồng Auto KD đã dừng.", flush=True)
+
+# ===================================================================
+# CÁC LUỒNG PHỤ (VÒNG LẶP, SPAM)
+# ===================================================================
+def run_hourly_loop_thread():
+    """Hàm chứa vòng lặp gửi kevent, chạy trong một luồng riêng."""
+    global is_hourly_loop_enabled, loop_delay_seconds
+    print("[HOURLY LOOP] Luồng vòng lặp đã khởi động.", flush=True)
+    while True:
+        with lock:
+            if not is_hourly_loop_enabled: break
+        
+        for _ in range(loop_delay_seconds):
+            if not is_hourly_loop_enabled: break
+            time.sleep(1)
+        
+        with lock:
+            if is_hourly_loop_enabled and event_bot_instance and is_event_bot_running:
+                print(f"\n[HOURLY LOOP] Hết {loop_delay_seconds} giây. Tự động gửi lại lệnh 'kevent'...", flush=True)
+                event_bot_instance.sendMessage(CHANNEL_ID, "kevent")
+            elif not is_event_bot_running:
+                print("[HOURLY LOOP] Bot sự kiện không chạy, không gửi kevent.", flush=True)
+                break
+
+    print("[HOURLY LOOP] Luồng vòng lặp đã dừng.", flush=True)
 
 def spam_loop():
-    active_server_threads = {}
+    """Vòng lặp vô tận kiểm tra và gửi tin nhắn spam."""
+    bot = discum.Client(token=TOKEN, log=False)
+    @bot.gateway.command
+    def on_ready(resp):
+        if resp.event.ready: print("[SPAM BOT] Gateway đã kết nối.", flush=True)
+    threading.Thread(target=bot.gateway.run, daemon=True).start()
+    time.sleep(5) 
     while True:
         try:
-            for server in servers:
-                server_id = server.get('id')
-                spam_is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
-                if spam_is_on and server_id not in active_server_threads:
-                    print(f"[Spam Control] Bắt đầu luồng spam cho server: {server.get('name')}", flush=True)
-                    stop_event = threading.Event()
-                    thread = threading.Thread(target=spam_for_server, args=(server, stop_event), daemon=True)
-                    thread.start()
-                    active_server_threads[server_id] = (thread, stop_event)
-                elif not spam_is_on and server_id in active_server_threads:
-                    print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
-                    thread, stop_event = active_server_threads[server_id]
-                    stop_event.set()
-                    del active_server_threads[server_id]
-            for server_id, (thread, _) in list(active_server_threads.items()):
-                if not thread.is_alive():
-                    del active_server_threads[server_id]
-            time.sleep(5)
+            with lock: panels_to_process = list(spam_panels)
+            for panel in panels_to_process:
+                if panel['is_active'] and panel['channel_id'] and panel['message']:
+                    if time.time() - panel['last_spam_time'] >= panel['delay']:
+                        try:
+                            bot.sendMessage(str(panel['channel_id']), str(panel['message']))
+                            with lock:
+                                for p in spam_panels:
+                                    if p['id'] == panel['id']: p['last_spam_time'] = time.time(); break
+                        except Exception as e:
+                            print(f"LỖI SPAM: Không thể gửi tin nhắn tới kênh {panel['channel_id']}. Lỗi: {e}", flush=True)
+            time.sleep(1)
         except Exception as e:
-            print(f"[ERROR in spam_loop_manager] {e}", flush=True)
+            print(f"LỖI NGOẠI LỆ trong vòng lặp spam: {e}", flush=True)
             time.sleep(5)
 
-def spam_for_server(server_config, stop_event):
-    server_name = server_config.get('name')
-    channel_id = server_config.get('spam_channel_id')
-    message = server_config.get('spam_message')
-    while not stop_event.is_set():
-        try:
-            with bots_lock:
-                active_main_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
-                active_sub_bots = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
-                bots_to_spam = active_main_bots + active_sub_bots
-            delay = server_config.get('spam_delay', 10)
-            for bot in bots_to_spam:
-                if stop_event.is_set(): break
-                try:
-                    bot.sendMessage(channel_id, message)
-                    time.sleep(2) 
-                except Exception as e:
-                    print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
-            if not stop_event.is_set():
-                stop_event.wait(timeout=delay)
-        except Exception as e:
-            print(f"[ERROR in spam_for_server {server_name}] {e}", flush=True)
-            stop_event.wait(timeout=10)
-
-def periodic_save_loop():
-    while True:
-        time.sleep(36000)
-        print("[Settings] Bắt đầu lưu định kỳ (10 giờ)...", flush=True)
-        save_settings()
-        
+# ===================================================================
+# WEB SERVER (FLASK)
+# ===================================================================
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Karuta Deep - Shadow Network Control</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
+    <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Control Panel</title>
     <style>
-        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; }
-        body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
-        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); }
-        .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
-        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
-        .panel { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; position: relative;}
-        .panel h2 { font-family: 'Orbitron', cursive; font-size: 1.4rem; margin-bottom: 20px; text-transform: uppercase; border-bottom: 2px solid; padding-bottom: 10px; color: var(--bone-white); }
-        .panel h2 i { margin-right: 10px; }
-        .btn { background: var(--secondary-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; }
-        .btn-small { padding: 5px 10px; font-size: 0.9em;}
-        .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
-        .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
-        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
-        .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
-        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; flex-shrink: 0; }
-        .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
-        .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
-        .status-panel, .global-settings-panel { grid-column: 1 / -1; }
-        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
-        .timer-display { font-size: 1.2em; font-weight: 700; }
-        .bot-status-container { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px; }
-        .bot-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
-        .bot-status-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: rgba(0,0,0,0.3); border-radius: 4px; }
-        .btn-toggle-state { padding: 3px 5px; font-size: 0.9em; border-radius: 4px; cursor: pointer; text-transform: uppercase; background: transparent; font-weight: 700; border: none; }
-        .btn-rise { color: var(--necro-green); } .btn-rest { color: var(--dark-red); }
-        .bot-main span:first-child { color: #FF4500; font-weight: 700; }
-        .add-server-btn { display: flex; align-items: center; justify-content: center; min-height: 200px; border: 2px dashed var(--border-color); cursor: pointer; transition: all 0.3s ease; }
-        .add-server-btn:hover { background: var(--secondary-bg); border-color: var(--blood-red); }
-        .add-server-btn i { font-size: 3rem; color: var(--text-secondary); }
-        .btn-delete-server { position: absolute; top: 15px; right: 15px; background: var(--dark-red); border: 1px solid var(--blood-red); color: var(--bone-white); width: auto; padding: 5px 10px; border-radius: 50%; }
-        .server-sub-panel { border-top: 1px solid var(--border-color); margin-top: 20px; padding-top: 20px;}
-        .flex-row { display:flex; gap: 10px; align-items: center;}
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 20px;}
+        .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; width: 100%; max-width: 1300px; }
+        .panel { text-align: center; background-color: #1e1e1e; padding: 20px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 15px; border: 2px solid #1e1e1e; transition: border-color 0.3s;}
+        .panel.active-mode { border-color: #03dac6; }
+        h1, h2 { color: #bb86fc; margin-top: 0; } .status { font-size: 1.1em; }
+        .status-on { color: #03dac6; } .status-off { color: #cf6679; }
+        button { background-color: #bb86fc; color: #121212; border: none; padding: 12px 24px; font-size: 1em; border-radius: 5px; cursor: pointer; transition: all 0.3s; font-weight: bold; }
+        button:hover:not(:disabled) { background-color: #a050f0; transform: translateY(-2px); }
+        button:disabled { background-color: #444; color: #888; cursor: not-allowed; }
+        .input-group { display: flex; } .input-group label { white-space: nowrap; padding: 10px; background-color: #333; border-radius: 5px 0 0 5px; }
+        .input-group input { width:100%; border: 1px solid #333; background-color: #222; color: #eee; padding: 10px; border-radius: 0 5px 5px 0; }
+        .spam-controls { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 840px; background-color: #1e1e1e; padding: 20px; border-radius: 10px; }
+        #panel-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; width: 100%; }
+        .spam-panel { background-color: #2a2a2a; padding: 20px; border-radius: 10px; display: flex; flex-direction: column; gap: 15px; border-left: 5px solid #333; }
+        .spam-panel.active { border-left-color: #03dac6; }
+        .spam-panel input, .spam-panel textarea { width: 100%; box-sizing: border-box; border: 1px solid #444; background-color: #333; color: #eee; padding: 10px; border-radius: 5px; font-size: 1em; }
+        .spam-panel textarea { resize: vertical; min-height: 80px; }
+        .spam-panel-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .delete-btn { background-color: #cf6679 !important; }
+        .add-panel-btn { width: 100%; padding: 15px; font-size: 1.2em; background-color: rgba(3, 218, 198, 0.2); border: 2px dashed #03dac6; color: #03dac6; cursor: pointer; border-radius: 10px;}
+        .timer { font-size: 0.9em; color: #888; text-align: right; }
     </style>
 </head>
 <body>
+    <h1>Karuta Bot Control</h1>
+    <p>Chọn một chế độ để chạy. Hai chế độ không thể chạy cùng lúc.</p>
     <div class="container">
-        <div class="header"> <h1 class="title">Shadow Network Control</h1> </div>
-        <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
-        <div class="main-grid">
-            <div class="panel status-panel">
-                <h2><i class="fas fa-heartbeat"></i> System Status</h2>
-                <div class="bot-status-container">
-                    <div class="status-grid">
-                         <div class="status-row">
-                            <span><i class="fas fa-redo"></i> Auto Reboot</span>
-                            <div class="flex-row">
-                                <input type="number" id="auto-reboot-delay" value="{{ auto_reboot_delay }}" style="width: 80px; text-align: right; padding: 5px;">
-                                <span id="reboot-timer" class="timer-display">--:--:--</span>
-                                <button type="button" id="auto-reboot-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_reboot_enabled else 'ENABLE' }}</button>
-                            </div>
-                        </div>
-                        <div class="status-row">
-                            <span><i class="fas fa-server"></i> Uptime</span>
-                            <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
-                        </div>
-                    </div>
-                    <div id="bot-status-list" class="bot-status-grid"></div>
-                </div>
+        <div class="panel" id="event-bot-panel">
+            <h2>Chế độ 1: Auto Play Event</h2>
+            <p style="font-size:0.9em; color:#aaa;">Tự động chơi event với logic phức tạp (di chuyển, tìm quả, xác nhận).</p>
+            <div id="event-bot-status" class="status">Trạng thái: ĐÃ DỪNG</div>
+            <button id="toggleEventBotBtn">Bật Auto Play</button>
+        </div>
+        <div class="panel" id="autoclick-panel">
+            <h2>Chế độ 2: Auto Click</h2>
+            <p style="font-size:0.9em; color:#aaa;">Chỉ click liên tục vào một nút. Bạn phải tự gõ 'kevent' để bot nhận diện.</p>
+            <div id="autoclick-status" class="status">Trạng thái: ĐÃ DỪNG</div>
+            <div class="input-group">
+                <label for="autoclick-button-index">Button Index</label>
+                <input type="number" id="autoclick-button-index" value="0" min="0">
             </div>
-
-            <div class="panel global-settings-panel">
-                <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-watermelon-slice"></i> Watermelon Grab (All Servers)</h3>
-                    <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                        <!-- JS will populate this -->
-                    </div>
-                </div>
+            <div class="input-group">
+                <label for="autoclick-count">Số lần click</label>
+                <input type="number" id="autoclick-count" value="10" min="0">
             </div>
-
-            {% for server in servers %}
-            <div class="panel server-panel" data-server-id="{{ server.id }}">
-                <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
-                <h2><i class="fas fa-server"></i> {{ server.name }}</h2>
-                
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-cogs"></i> Channel Config</h3>
-                    <div class="input-group"><label>Main Channel ID</label><input type="text" class="channel-input" data-field="main_channel_id" value="{{ server.main_channel_id or '' }}"></div>
-                    <div class="input-group"><label>KTB Channel ID</label><input type="text" class="channel-input" data-field="ktb_channel_id" value="{{ server.ktb_channel_id or '' }}"></div>
-                    <div class="input-group"><label>Spam Channel ID</label><input type="text" class="channel-input" data-field="spam_channel_id" value="{{ server.spam_channel_id or '' }}"></div>
-                </div>
-
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Card Grab)</h3>
-                    {% for bot in main_bots_info %}
-                    <div class="grab-section">
-                        <h3>{{ bot.name }}</h3>
-                        <div class="input-group">
-                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
-                            <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
-                                {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
-                            </button>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
-                    <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
-                    <div class="input-group">
-                         <label>Delay (s)</label>
-                         <input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}">
-                         <span class="timer-display spam-timer">--:--:--</span>
-                    </div>
-                    <button type="button" class="btn broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
-                </div>
+            <p style="font-size:0.8em; color:#888; margin:0;">Nhập 0 để click vô hạn</p>
+            <button id="toggleAutoclickBtn">Bật Auto Click</button>
+        </div>
+        <div class="panel" id="auto-kd-panel">
+            <h2>Auto KD</h2>
+            <p style="font-size:0.9em; color:#aaa;">Tự động gửi 'kd' khi phát hiện "blessing has activated!" trong kênh KD.</p>
+            <div id="auto-kd-status" class="status">Trạng thái: ĐÃ DỪNG</div>
+            <div style="font-size:0.8em; color:#666; margin:10px 0;">
+                KD Channel: <span id="kd-channel-display">Đang tải...</span>
             </div>
-            {% endfor %}
-
-            <div class="panel add-server-btn" id="add-server-btn">
-                <i class="fas fa-plus"></i>
+            <button id="toggleAutoKdBtn">Bật Auto KD</button>
+        </div>
+        <div class="panel">
+            <h2>Tiện ích: Vòng lặp</h2>
+            <p style="font-size:0.9em; color:#aaa;">Tự động gửi 'kevent' theo chu kỳ. Chỉ hoạt động khi "Chế độ 1" đang chạy.</p>
+            <div id="loop-status" class="status">Trạng thái: ĐÃ DỪNG</div>
+            <div class="input-group">
+                <label for="delay-input">Delay (giây)</label>
+                <input type="number" id="delay-input" value="3600">
             </div>
+            <button id="toggleLoopBtn">Bật Vòng lặp</button>
         </div>
     </div>
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const msgStatusContainer = document.getElementById('msg-status-container');
-        const msgStatusText = document.getElementById('msg-status-text');
-        
-        function showStatusMessage(message, isError = false) { if (!message) return; msgStatusText.textContent = message; msgStatusContainer.style.color = isError ? 'var(--blood-red)' : 'var(--necro-green)'; msgStatusContainer.style.display = 'block'; setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000); }
-        async function postData(url = '', data = {}) {
+    <div class="spam-controls">
+        <h2>Tiện ích: Spam Tin Nhắn</h2>
+        <div id="panel-container"></div>
+        <button class="add-panel-btn" onclick="addPanel()">+ Thêm Bảng Spam</button>
+    </div>
+    <script>
+        // --- SCRIPT CHUNG ---
+        async function apiCall(endpoint, method = 'POST', body = null) {
+            const options = { method, headers: {'Content-Type': 'application/json'} };
+            if (body) options.body = JSON.stringify(body);
             try {
-                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-                const result = await response.json();
-                showStatusMessage(result.message, result.status !== 'success');
-                if (result.status === 'success' && url !== '/api/save_settings') { fetch('/api/save_settings', { method: 'POST' }); if (result.reload) { setTimeout(() => window.location.reload(), 500); } }
-                setTimeout(fetchStatus, 500);
-                return result;
-            } catch (error) { console.error('Error:', error); showStatusMessage('Server communication error.', true); }
+                const response = await fetch(endpoint, options);
+                return response.json();
+            } catch (error) {
+                console.error('API call failed:', error);
+                return { error: 'API call failed' };
+            }
         }
-        function formatTime(seconds) { if (isNaN(seconds) || seconds < 0) return "--:--:--"; seconds = Math.floor(seconds); const h = Math.floor(seconds / 3600).toString().padStart(2, '0'); const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0'); const s = (seconds % 60).toString().padStart(2, '0'); return `${h}:${m}:${s}`; }
-        function updateElement(element, { textContent, className, value, innerHTML }) { if (!element) return; if (textContent !== undefined) element.textContent = textContent; if (className !== undefined) element.className = className; if (value !== undefined) element.value = value; if (innerHTML !== undefined) element.innerHTML = innerHTML; }
+
+        // --- DOM ELEMENTS ---
+        const eventBotPanel = document.getElementById('event-bot-panel'),
+              eventBotStatusDiv = document.getElementById('event-bot-status'), 
+              toggleEventBotBtn = document.getElementById('toggleEventBotBtn');
+
+        const autoclickPanel = document.getElementById('autoclick-panel'),
+              autoclickStatusDiv = document.getElementById('autoclick-status'), 
+              toggleAutoclickBtn = document.getElementById('toggleAutoclickBtn'), 
+              buttonIndexInput = document.getElementById('autoclick-button-index'), 
+              clickCountInput = document.getElementById('autoclick-count');
         
+        const loopStatusDiv = document.getElementById('loop-status'), 
+              toggleLoopBtn = document.getElementById('toggleLoopBtn'), 
+              delayInput = document.getElementById('delay-input');
+
+        // --- CẬP NHẬT TRẠNG THÁI ---
         async function fetchStatus() {
-            try {
-                const response = await fetch('/status');
-                const data = await response.json();
-                updateElement(document.getElementById('reboot-timer'), { textContent: formatTime(data.reboot_countdown) });
-                updateElement(document.getElementById('auto-reboot-toggle-btn'), { textContent: data.reboot_enabled ? 'DISABLE' : 'ENABLE' });
-                const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
-                updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
-                
-                const botListContainer = document.getElementById('bot-status-list');
-                botListContainer.innerHTML = ''; 
-                const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
-                allBots.forEach(bot => {
-                    const item = document.createElement('div');
-                    item.className = 'bot-status-item';
-                    if (bot.type === 'main') item.classList.add('bot-main');
-                    const buttonText = bot.is_active ? 'ONLINE' : 'OFFLINE';
-                    const buttonClass = bot.is_active ? 'btn-rise' : 'btn-rest';
-                    item.innerHTML = `<span>${bot.name}</span><button type="button" data-target="${bot.reboot_id}" class="btn-toggle-state ${buttonClass}">${buttonText}</button>`;
-                    botListContainer.appendChild(item);
-                });
+            const data = await apiCall('/api/status', 'GET');
+            if (data.error) {
+                eventBotStatusDiv.textContent = 'Lỗi kết nối đến server.';
+                return;
+            }
 
-                const wmGrid = document.getElementById('global-watermelon-grid');
-                wmGrid.innerHTML = '';
-                if (data.watermelon_grab_states && data.bot_statuses) {
-                    data.bot_statuses.main_bots.forEach(bot => {
-                        const botNodeId = bot.reboot_id;
-                        const isEnabled = data.watermelon_grab_states[botNodeId];
-                        const item = document.createElement('div');
-                        item.className = 'bot-status-item';
-                        item.innerHTML = `<span>${bot.name}</span>
-                            <button type="button" class="btn btn-small watermelon-toggle" data-node="${botNodeId}">
-                                <i class="fas fa-watermelon-slice"></i>&nbsp;${isEnabled ? 'DISABLE' : 'ENABLE'}
-                            </button>`;
-                        wmGrid.appendChild(item);
-                    });
-                }
-                
-                data.servers.forEach(serverData => {
-                    const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
-                    if (!serverPanel) return;
-                    serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
-                        const node = btn.dataset.node;
-                        updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
-                    });
-                    const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
-                    updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
-                    const spamTimer = serverPanel.querySelector('.spam-timer');
-                    updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
-                });
-            } catch (error) { console.error('Error fetching status:', error); }
+            // Chế độ 1: Event Bot
+            eventBotStatusDiv.textContent = data.is_event_bot_running ? 'Trạng thái: ĐANG CHẠY' : 'Trạng thái: ĐÃ DỪNG';
+            eventBotStatusDiv.className = data.is_event_bot_running ? 'status status-on' : 'status status-off';
+            toggleEventBotBtn.textContent = data.is_event_bot_running ? 'Dừng Auto Play' : 'Bật Auto Play';
+            toggleEventBotBtn.disabled = data.is_autoclick_running;
+            eventBotPanel.classList.toggle('active-mode', data.is_event_bot_running);
+
+            // Chế độ 2: Auto Click
+            const countText = data.autoclick_count > 0 ? `${data.autoclick_clicks_done}/${data.autoclick_count}` : `${data.autoclick_clicks_done}/∞`;
+            autoclickStatusDiv.textContent = data.is_autoclick_running ? `Trạng thái: ĐANG CHẠY (${countText})` : 'Trạng thái: ĐÃ DỪNG';
+            autoclickStatusDiv.className = data.is_autoclick_running ? 'status status-on' : 'status status-off';
+            toggleAutoclickBtn.textContent = data.is_autoclick_running ? 'Dừng Auto Click' : 'Bật Auto Click';
+            buttonIndexInput.disabled = data.is_autoclick_running;
+            clickCountInput.disabled = data.is_autoclick_running;
+            toggleAutoclickBtn.disabled = data.is_event_bot_running;
+            autoclickPanel.classList.toggle('active-mode', data.is_autoclick_running);
+
+            // Auto KD
+            document.getElementById('auto-kd-status').textContent = data.is_auto_kd_running ? 'Trạng thái: ĐANG CHẠY' : 'Trạng thái: ĐÃ DỪNG';
+            document.getElementById('auto-kd-status').className = data.is_auto_kd_running ? 'status status-on' : 'status status-off';
+            document.getElementById('toggleAutoKdBtn').textContent = data.is_auto_kd_running ? 'Dừng Auto KD' : 'Bật Auto KD';
+            document.getElementById('auto-kd-panel').classList.toggle('active-mode', data.is_auto_kd_running);
+            document.getElementById('kd-channel-display').textContent = data.kd_channel_id;
+
+            // Vòng lặp
+            loopStatusDiv.textContent = data.is_hourly_loop_enabled ? 'Trạng thái: ĐANG CHẠY' : 'Trạng thái: ĐÃ DỪNG';
+            loopStatusDiv.className = data.is_hourly_loop_enabled ? 'status status-on' : 'status status-off';
+            toggleLoopBtn.textContent = data.is_hourly_loop_enabled ? 'TẮT VÒNG LẶP' : 'BẬT VÒNG LẶP';
+            toggleLoopBtn.disabled = !data.is_event_bot_running && !data.is_hourly_loop_enabled;
         }
         
-        setInterval(fetchStatus, 1000);
-
-        document.querySelector('.container').addEventListener('click', e => {
-            const button = e.target.closest('button');
-            if (!button) return;
-
-            if (button.classList.contains('watermelon-toggle')) {
-                const node = button.dataset.node;
-                postData('/api/watermelon_toggle', { node: node });
-                return;
-            }
-
-            const serverPanel = button.closest('.server-panel');
-            if (serverPanel) {
-                const serverId = serverPanel.dataset.serverId;
-                if (button.classList.contains('harvest-toggle')) { 
-                    const node = button.dataset.node; 
-                    const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); 
-                    postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); 
-                } else if (button.classList.contains('broadcast-toggle')) { 
-                    const message = serverPanel.querySelector('.spam-message').value; 
-                    const delay = serverPanel.querySelector('.spam-delay').value; 
-                    postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); 
-                } else if (button.classList.contains('btn-delete-server')) { 
-                    if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } 
-                }
-                return;
-            }
-            
-            if (button.id === 'auto-reboot-toggle-btn') {
-                postData('/api/reboot_toggle_auto', { delay: document.getElementById('auto-reboot-delay').value });
-            } else if (button.matches('#bot-status-list button[data-target]')) {
-                postData('/api/toggle_bot_state', { target: button.dataset.target });
-            }
+        // --- EVENT LISTENERS ---
+        toggleEventBotBtn.addEventListener('click', () => apiCall('/api/toggle_event_bot').then(fetchStatus));
+        toggleAutoclickBtn.addEventListener('click', () => {
+            const payload = {
+                button_index: parseInt(buttonIndexInput.value, 10),
+                count: parseInt(clickCountInput.value, 10)
+            };
+            apiCall('/api/toggle_autoclick', 'POST', payload).then(fetchStatus);
+        });
+        document.getElementById('toggleAutoKdBtn').addEventListener('click', () => 
+            apiCall('/api/toggle_auto_kd').then(fetchStatus)
+        );
+        toggleLoopBtn.addEventListener('click', () => {
+            const currentStatus = loopStatusDiv.textContent.includes('ĐANG CHẠY');
+            apiCall('/api/toggle_hourly_loop', 'POST', { enabled: !currentStatus, delay: parseInt(delayInput.value, 10) }).then(fetchStatus);
         });
 
-        document.querySelector('.main-grid').addEventListener('change', e => {
-            const target = e.target;
-            const serverPanel = target.closest('.server-panel');
-            if (!serverPanel || !target.classList.contains('channel-input')) return;
-            const serverId = serverPanel.dataset.serverId;
-            const payload = { server_id: serverId };
-            payload[target.dataset.field] = target.value;
-            postData('/api/update_server_channels', payload);
-        });
+        // --- SCRIPT CHO SPAMMER ---
+        function createPanelElement(panel) {
+            const div = document.createElement('div');
+            div.className = `spam-panel ${panel.is_active ? 'active' : ''}`;
+            div.dataset.id = panel.id;
+            let countdown = panel.is_active ? panel.delay - (Date.now() / 1000 - panel.last_spam_time) : panel.delay;
+            countdown = Math.max(0, Math.ceil(countdown));
+            div.innerHTML = `<textarea class="message-input" placeholder="Nội dung spam...">${panel.message}</textarea><input type="text" class="channel-input" placeholder="ID Kênh..." value="${panel.channel_id}"><input type="number" class="delay-input" placeholder="Delay (giây)..." value="${panel.delay}"><div class="spam-panel-controls"><button class="toggle-btn">${panel.is_active ? 'TẮT' : 'BẬT'}</button><button class="delete-btn">XÓA</button></div><div class="timer">Hẹn giờ: ${countdown}s</div>`;
+            const updatePanelData = () => { const updatedPanel = { ...panel, message: div.querySelector('.message-input').value, channel_id: div.querySelector('.channel-input').value, delay: parseInt(div.querySelector('.delay-input').value, 10) || 60 }; apiCall('/api/panel/update', 'POST', updatedPanel); };
+            div.querySelector('.toggle-btn').addEventListener('click', () => {
+                const updatedPanel = { ...panel, message: div.querySelector('.message-input').value, channel_id: div.querySelector('.channel-input').value, delay: parseInt(div.querySelector('.delay-input').value, 10) || 60, is_active: !panel.is_active };
+                apiCall('/api/panel/update', 'POST', updatedPanel).then(fetchPanels);
+            });
+            div.querySelector('.delete-btn').addEventListener('click', () => { if (confirm('Xóa bảng này?')) apiCall('/api/panel/delete', 'POST', { id: panel.id }).then(fetchPanels); });
+            div.querySelector('.message-input').addEventListener('change', updatePanelData);
+            div.querySelector('.channel-input').addEventListener('change', updatePanelData);
+            div.querySelector('.delay-input').addEventListener('change', updatePanelData);
+            return div;
+        }
+        async function fetchPanels() {
+            const focusedElement = document.activeElement;
+            if (focusedElement && (focusedElement.tagName === 'INPUT' || focusedElement.tagName === 'TEXTAREA') && focusedElement.closest('.spam-panel')) { return; }
+            const data = await apiCall('/api/panels', 'GET');
+            const container = document.getElementById('panel-container');
+            container.innerHTML = '';
+            if (data.panels) data.panels.forEach(panel => container.appendChild(createPanelElement(panel)));
+        }
+        async function addPanel() { await apiCall('/api/panel/add', 'POST'); fetchPanels(); }
 
-        document.getElementById('add-server-btn').addEventListener('click', () => { 
-            const name = prompt("Enter a name for the new server:", "New Server"); 
-            if (name) { postData('/api/add_server', { name: name }); } 
+        // --- KHỞI CHẠY ---
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchStatus();
+            fetchPanels();
+            setInterval(fetchStatus, 2000);
+            setInterval(fetchPanels, 2000);
         });
-    });
-</script>
+    </script>
 </body>
 </html>
 """
-
-# --- FLASK ROUTES ---
 @app.route("/")
 def index():
-    sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
-    main_bots_info = [
-        {"id": i + 1, "name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"}
-        for i in range(len(main_tokens))
-    ]
-    return render_template_string(HTML_TEMPLATE, servers=sorted_servers, auto_reboot_enabled=auto_reboot_enabled, auto_reboot_delay=auto_reboot_delay, main_bots_info=main_bots_info)
+    return render_template_string(HTML_TEMPLATE)
 
-@app.route("/api/add_server", methods=['POST'])
-def api_add_server():
-    data = request.get_json()
-    name = data.get('name')
-    if not name: return jsonify({'status': 'error', 'message': 'Server name is required.'}), 400
-    
-    new_server = {
-        "id": f"server_{uuid.uuid4().hex}", "name": name,
-        "main_channel_id": "", "ktb_channel_id": "", "spam_channel_id": "",
-        "spam_enabled": False, "spam_message": "", "spam_delay": 10, "last_spam_time": 0
-    }
-    for i in range(len(main_tokens)):
-        bot_num = i + 1
-        new_server[f'auto_grab_enabled_{bot_num}'] = False
-        new_server[f'heart_threshold_{bot_num}'] = 50
-        # Không cần thêm cài đặt dưa hấu ở đây nữa
-
-    servers.append(new_server)
-    return jsonify({'status': 'success', 'message': f'Server "{name}" added.', 'reload': True})
-
-@app.route("/api/delete_server", methods=['POST'])
-def api_delete_server():
-    global servers
-    server_id = request.get_json().get('server_id')
-    server_to_delete = next((s for s in servers if s.get('id') == server_id), None)
-    if server_to_delete:
-        servers = [s for s in servers if s.get('id') != server_id]
-        return jsonify({'status': 'success', 'message': f'Server "{server_to_delete.get("name")}" deleted.', 'reload': True})
-    return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-
-@app.route("/api/update_server_channels", methods=['POST'])
-def api_update_server_channels():
-    data = request.get_json()
-    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
-    if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-    updated_fields = []
-    for field in ['main_channel_id', 'ktb_channel_id', 'spam_channel_id']:
-        if field in data:
-            server[field] = data[field]
-            updated_fields.append(field.replace('_', ' ').title())
-    return jsonify({'status': 'success', 'message': f'{", ".join(updated_fields)} updated for {server["name"]}.'})
-
-@app.route("/api/harvest_toggle", methods=['POST'])
-def api_harvest_toggle():
-    data = request.get_json()
-    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
-    node = data.get('node')
-    if not server or not node: return jsonify({'status': 'error', 'message': 'Invalid request.'}), 400
-    grab_key = f'auto_grab_enabled_{node}'
-    threshold_key = f'heart_threshold_{node}'
-    server[grab_key] = not server.get(grab_key, False)
-    server[threshold_key] = int(data.get('threshold', 50))
-    state = "ENABLED" if server[grab_key] else "DISABLED"
-    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
-    msg = f"Card Grab for {bot_name} was {state} on server {server['name']}."
-    return jsonify({'status': 'success', 'message': msg})
-
-@app.route("/api/watermelon_toggle", methods=['POST'])
-def api_watermelon_toggle():
-    global watermelon_grab_states
-    data = request.get_json()
-    node = data.get('node') # e.g., 'main_1'
-    if not node or node not in watermelon_grab_states:
-        return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
-    
-    watermelon_grab_states[node] = not watermelon_grab_states.get(node, False)
-    
-    state = "ENABLED" if watermelon_grab_states[node] else "DISABLED"
-    try:
-        bot_name_index = int(node.split('_')[1]) - 1
-        bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else f"MAIN_{node}"
-    except (IndexError, ValueError):
-        bot_name = node.upper()
-
-    msg = f"Global Watermelon Grab was {state} for Node {bot_name}."
-    return jsonify({'status': 'success', 'message': msg})
-
-@app.route("/api/broadcast_toggle", methods=['POST'])
-def api_broadcast_toggle():
-    data = request.get_json()
-    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
-    if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-    server['spam_message'] = data.get("message", "").strip()
-    server['spam_delay'] = int(data.get("delay", 10))
-    server['spam_enabled'] = not server.get('spam_enabled', False)
-    if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
-        server['spam_enabled'] = False
-        return jsonify({'status': 'error', 'message': f'Spam message/channel required for {server["name"]}.'})
-    msg = f"Spam {'ENABLED' if server['spam_enabled'] else 'DISABLED'} for {server['name']}."
-    return jsonify({'status': 'success', 'message': msg})
-
-@app.route("/api/reboot_toggle_auto", methods=['POST'])
-def api_reboot_toggle_auto():
-    global auto_reboot_enabled, auto_reboot_delay, auto_reboot_thread, auto_reboot_stop_event, last_reboot_cycle_time
-    data = request.get_json()
-    auto_reboot_enabled = not auto_reboot_enabled
-    auto_reboot_delay = int(data.get("delay", 3600))
-    if auto_reboot_enabled:
-        last_reboot_cycle_time = time.time()
-        if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
-            auto_reboot_stop_event = threading.Event()
-            auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-            auto_reboot_thread.start()
-        msg = "Global Auto Reboot ENABLED."
-    else:
-        if auto_reboot_stop_event: auto_reboot_stop_event.set()
-        auto_reboot_thread = None
-        msg = "Global Auto Reboot DISABLED."
-    return jsonify({'status': 'success', 'message': msg})
-
-@app.route("/api/toggle_bot_state", methods=['POST'])
-def api_toggle_bot_state():
-    target = request.get_json().get('target')
-    if target in bot_active_states:
-        bot_active_states[target] = not bot_active_states[target]
-        state_text = "AWAKENED" if bot_active_states[target] else "DORMANT"
-        return jsonify({'status': 'success', 'message': f"Target {target.upper()} set to {state_text}."})
-    return jsonify({'status': 'error', 'message': 'Target not found.'}), 404
-
-@app.route("/api/save_settings", methods=['POST'])
-def api_save_settings():
-    save_settings()
-    return jsonify({'status': 'success', 'message': 'Settings saved.'})
-
-@app.route("/status")
+@app.route("/api/status", methods=['GET'])
 def status():
-    now = time.time()
-    for server in servers:
-        server['spam_countdown'] = 0
-        if server.get('spam_enabled'):
-            server['last_spam_time'] = server.get('last_spam_time', 0)
+    with lock:
+        return jsonify({
+            "is_event_bot_running": is_event_bot_running,
+            "is_hourly_loop_enabled": is_hourly_loop_enabled,
+            "loop_delay_seconds": loop_delay_seconds,
+            "is_autoclick_running": is_autoclick_running,
+            "autoclick_button_index": autoclick_button_index,
+            "autoclick_count": autoclick_count,
+            "autoclick_clicks_done": autoclick_clicks_done,
+            "is_auto_kd_running": is_auto_kd_running,
+            "kd_channel_id": KD_CHANNEL_ID or "Chưa cấu hình"
+        })
+
+@app.route("/api/toggle_event_bot", methods=['POST'])
+def toggle_event_bot():
+    global event_bot_thread, is_event_bot_running, is_autoclick_running
+    with lock:
+        if is_autoclick_running:
+            return jsonify({"status": "error", "message": "Auto Click is running. Stop it first."}), 400
         
-    with bots_lock:
-        main_bot_statuses = [
-            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot is not None, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
-            for i, bot in enumerate(main_bots)
-        ]
-        sub_bot_statuses = [
-            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot is not None, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
-            for i, bot in enumerate(bots)
-        ]
+        if is_event_bot_running:
+            is_event_bot_running = False
+            print("[CONTROL] Nhận lệnh DỪNG Bot Event.", flush=True)
+        else:
+            is_event_bot_running = True
+            print("[CONTROL] Nhận lệnh BẬT Bot Event.", flush=True)
+            event_bot_thread = threading.Thread(target=run_event_bot_thread, daemon=True)
+            event_bot_thread.start()
+    return jsonify({"status": "ok"})
 
-    return jsonify({
-        'reboot_enabled': auto_reboot_enabled, 
-        'reboot_countdown': (last_reboot_cycle_time + auto_reboot_delay - now) if auto_reboot_enabled else 0,
-        'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
-        'server_start_time': server_start_time,
-        'servers': servers,
-        'watermelon_grab_states': watermelon_grab_states
-    })
+@app.route("/api/toggle_autoclick", methods=['POST'])
+def toggle_autoclick():
+    global autoclick_bot_thread, is_autoclick_running, is_event_bot_running
+    global autoclick_button_index, autoclick_count, autoclick_clicks_done, autoclick_target_message_data
+    data = request.get_json()
+    with lock:
+        if is_event_bot_running:
+            return jsonify({"status": "error", "message": "Event Bot is running. Stop it first."}), 400
+            
+        if is_autoclick_running:
+            is_autoclick_running = False
+            print("[CONTROL] Nhận lệnh DỪNG Auto Click.", flush=True)
+        else:
+            is_autoclick_running = True
+            autoclick_button_index = int(data.get('button_index', 0))
+            autoclick_count = int(data.get('count', 1))
+            autoclick_clicks_done = 0
+            autoclick_target_message_data = None
+            print(f"[CONTROL] Nhận lệnh BẬT Auto Click: {autoclick_count or 'vô hạn'} lần vào button {autoclick_button_index}.", flush=True)
+            autoclick_bot_thread = threading.Thread(target=run_autoclick_bot_thread, daemon=True)
+            autoclick_bot_thread.start()
+    return jsonify({"status": "ok"})
 
-# --- MAIN EXECUTION ---
-if __name__ == "__main__":
-    load_settings()
+@app.route("/api/toggle_auto_kd", methods=['POST'])
+def toggle_auto_kd():
+    global auto_kd_thread, is_auto_kd_running
     
-    print("Đang khởi tạo các bot...", flush=True)
-    with bots_lock:
-        for i, token in enumerate(main_tokens):
-            if token.strip():
-                bot_num = i + 1
-                bot_id = f"main_{bot_num}"
-                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
-                main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
-                if bot_id not in bot_active_states: bot_active_states[bot_id] = True
-                if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
+    with lock:
+        if not KD_CHANNEL_ID:
+            return jsonify({
+                "status": "error", 
+                "message": "Chưa cấu hình KD_CHANNEL_ID trong biến môi trường."
+            }), 400
         
-        for i, token in enumerate(tokens):
-            if token.strip():
-                bot_id = f'sub_{i}'
-                bots.append(create_bot(token.strip(), bot_identifier=i, is_main=False))
-                if bot_id not in bot_active_states: bot_active_states[bot_id] = True
+        if is_auto_kd_running:
+            is_auto_kd_running = False
+            print("[CONTROL] Nhận lệnh DỪNG Auto KD.", flush=True)
+        else:
+            is_auto_kd_running = True
+            print("[CONTROL] Nhận lệnh BẬT Auto KD.", flush=True)
+            auto_kd_thread = threading.Thread(target=run_auto_kd_thread, daemon=True)
+            auto_kd_thread.start()
+    
+    return jsonify({"status": "ok"})
 
-    print("Đang khởi tạo các luồng nền...", flush=True)
-    threading.Thread(target=periodic_save_loop, daemon=True).start()
+@app.route("/api/toggle_hourly_loop", methods=['POST'])
+def toggle_hourly_loop():
+    global hourly_loop_thread, is_hourly_loop_enabled, loop_delay_seconds
+    data = request.get_json()
+    with lock:
+        is_hourly_loop_enabled = data.get('enabled')
+        loop_delay_seconds = int(data.get('delay', 3600))
+        if is_hourly_loop_enabled:
+            if hourly_loop_thread is None or not hourly_loop_thread.is_alive():
+                hourly_loop_thread = threading.Thread(target=run_hourly_loop_thread, daemon=True)
+                hourly_loop_thread.start()
+            print(f"[CONTROL] Vòng lặp ĐÃ BẬT với delay {loop_delay_seconds} giây.", flush=True)
+        else:
+            print("[CONTROL] Vòng lặp ĐÃ TẮT.", flush=True)
+    return jsonify({"status": "ok"})
+
+# ===================================================================
+# API CHO SPAM PANEL
+# ===================================================================
+@app.route("/api/panels", methods=['GET'])
+def get_panels():
+    with lock:
+        return jsonify({"panels": spam_panels})
+
+@app.route("/api/panel/add", methods=['POST'])
+def add_panel():
+    global panel_id_counter
+    with lock:
+        new_panel = { "id": panel_id_counter, "message": "", "channel_id": "", "delay": 60, "is_active": False, "last_spam_time": 0 }
+        spam_panels.append(new_panel)
+        panel_id_counter += 1
+    return jsonify({"status": "ok", "new_panel": new_panel})
+
+@app.route("/api/panel/update", methods=['POST'])
+def update_panel():
+    data = request.get_json()
+    with lock:
+        for panel in spam_panels:
+            if panel['id'] == data['id']:
+                if data.get('is_active') and not panel.get('is_active'):
+                    data['last_spam_time'] = 0
+                panel.update(data)
+                break
+    return jsonify({"status": "ok"})
+
+@app.route("/api/panel/delete", methods=['POST'])
+def delete_panel():
+    data = request.get_json()
+    with lock:
+        spam_panels[:] = [p for p in spam_panels if p['id'] != data['id']]
+    return jsonify({"status": "ok"})
+
+# ===================================================================
+# KHỞI CHẠY WEB SERVER
+# ===================================================================
+if __name__ == "__main__":
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
-    if auto_reboot_enabled:
-        auto_reboot_stop_event = threading.Event()
-        auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-        auto_reboot_thread.start()
-    
     port = int(os.environ.get("PORT", 10000))
-    print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    print(f"[SERVER] Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
