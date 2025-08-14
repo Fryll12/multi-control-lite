@@ -8,19 +8,19 @@ import os
 import sys
 from collections import deque
 from flask import Flask, jsonify, render_template_string, request
-from dotenv import load_dotenv # <<< THÊM MỚI
+from dotenv import load_dotenv
 
 # ===================================================================
 # CẤU HÌNH VÀ BIẾN TOÀN CỤC
 # ===================================================================
 
 # --- Tải và lấy cấu hình từ biến môi trường ---
-load_dotenv() # <<< THÊM MỚI
+load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 KD_CHANNEL_ID = os.getenv("KD_CHANNEL_ID")
-JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY") # <<< THÊM MỚI
-JSONBIN_BIN_ID = os.getenv("JSONBIN_BIN_ID")   # <<< THÊM MỚI
+JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
+JSONBIN_BIN_ID = os.getenv("JSONBIN_BIN_ID")
 KARUTA_ID = "646937666251915264"
 
 # --- Kiểm tra biến môi trường ---
@@ -56,14 +56,13 @@ auto_kd_thread, auto_kd_instance = None, None
 spam_thread = None
 
 # ===================================================================
-# HÀM LƯU/TẢI CÀI ĐẶT JSON (THÊM MỚI)
+# HÀM LƯU/TẢI CÀI ĐẶT JSON
 # ===================================================================
 
 def save_settings():
     """Lưu các cài đặt có thể cấu hình lên JSONBin.io"""
     with lock:
         if not JSONBIN_API_KEY or not JSONBIN_BIN_ID:
-            # print("[SETTINGS] WARN: Thiếu API Key hoặc Bin ID của JSONBin. Bỏ qua việc lưu.", flush=True)
             return
 
         settings_to_save = {
@@ -356,7 +355,7 @@ def spam_loop():
             time.sleep(5)
 
 # ===================================================================
-# WEB SERVER (FLASK) - Giao diện không đổi
+# WEB SERVER (FLASK)
 # ===================================================================
 app = Flask(__name__)
 HTML_TEMPLATE = """
@@ -657,9 +656,19 @@ def delete_panel():
 # KHỞI CHẠY WEB SERVER
 # ===================================================================
 if __name__ == "__main__":
+    load_settings() # Tải cài đặt cho Spam, Vòng lặp... từ JSON
+
+    # Luôn luôn mặc định bật Auto Play Event
+    print("[CONTROL] INFO: Trạng thái ban đầu của Auto Play Event được đặt là BẬT.", flush=True)
+    is_event_bot_running = True
+    event_bot_thread = threading.Thread(target=run_event_bot_thread, daemon=True)
+    event_bot_thread.start()
+
+    # Khởi động các luồng nền khác
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
+    # Chạy Web Server
     port = int(os.environ.get("PORT", 10000))
     print(f"[SERVER] Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False)
