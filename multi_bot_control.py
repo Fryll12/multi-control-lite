@@ -870,7 +870,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale-1.0">
     <title>Bot Control Panel</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 20px;}
@@ -1182,7 +1182,7 @@ def toggle_autoclick():
     data = request.get_json()
     with lock:
         if is_event_bot_running or is_auto_box_running:
-            return jsonify({"status": "error", "message": "Chế độ Event Bot hoặc Auto Box đang chạy. Dừng nó trước."}), 4Dừng
+            return jsonify({"status": "error", "message": "Chế độ Event Bot hoặc Auto Box đang chạy. Dừng nó trước."}), 400
             
         if is_autoclick_running:
             is_autoclick_running = False
