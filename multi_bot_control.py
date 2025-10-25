@@ -615,7 +615,7 @@ Respond with ONLY the number (1, 2, 3, etc.) of the BEST option to increase affe
         print("[AUTO KVI] Luồng Auto KVI đã dừng.", flush=True)
 
 # ===================================================================
-# CHỨC NĂNG MỚI: AUTO BOX
+# CHỨC NĂNG MỚI: AUTO BOX (ĐÃ SỬA LOGIC TIMEOUT)
 # ===================================================================
 def run_auto_box_thread():
     global is_auto_box_running, auto_box_instance
@@ -624,8 +624,16 @@ def run_auto_box_thread():
     bot = discum.Client(token=TOKEN, log=False)
     with lock: auto_box_instance = bot
     
+    # Biến để lưu tin nhắn game mới nhất
+    latest_game_message = None
+    # Biến theo dõi thời gian gửi kevent
+    last_kevent_time = 0
+    # Timeout 3 giây như yêu cầu
+    KEVENT_TIMEOUT_SECONDS = 3.0
+    
     @bot.gateway.command
     def on_message(resp):
+        nonlocal latest_game_message
         with lock:
             if not is_auto_box_running:
                 bot.gateway.close()
@@ -639,45 +647,81 @@ def run_auto_box_thread():
             m.get("channel_id") == CHANNEL_ID and 
             "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", "")):
             
-            print("[AUTO BOX] INFO: Phát hiện tin nhắn game. Sẽ bấm nút 0.", flush=True)
-            
-            # Bấm nút 0 ngay khi thấy tin nhắn
-            # Dùng thread để không block gateway
-            threading.Thread(target=handle_game_message, args=(m,)).start()
+            print("[AUTO BOX] INFO: Phát hiện tin nhắn game.", flush=True)
+            # Chỉ lưu tin nhắn, không hành động ngay
+            latest_game_message = m
 
-    def handle_game_message(message_data):
-        """Click nút 0 và gửi lại kevent."""
-        time.sleep(random.uniform(1.5, 2.5)) # Delay ngẫu nhiên
+    def auto_box_main_loop():
+        """Vòng lặp chính xử lý click và timeout"""
+        nonlocal latest_game_message, last_kevent_time
         
-        with lock:
-            if not is_auto_box_running: return # Kiểm tra lại phòng khi bot đã bị tắt
-
-        if click_button_by_index(bot, message_data, 0, "AUTO BOX"):
-            print("[AUTO BOX] INFO: Đã click nút 0. Gửi lại kevent...", flush=True)
-            time.sleep(random.uniform(2.0, 3.5)) # Delay ngẫu nhiên
-            
+        # Chờ gateway sẵn sàng
+        while not bot.gateway.session_id:
+            time.sleep(0.5)
             with lock:
-                if not is_auto_box_running: return # Kiểm tra lại
+                if not is_auto_box_running: return # Dừng nếu bị tắt trong lúc chờ
+        
+        print("[AUTO BOX] Gateway sẵn sàng. Gửi 'kevent' đầu tiên...", flush=True)
+        try:
+            bot.sendMessage(CHANNEL_ID, "kevent")
+            last_kevent_time = time.time()
+        except Exception as e:
+            print(f"[AUTO BOX] LỖI: Không thể gửi kevent đầu tiên: {e}", flush=True)
+            # Vòng lặp timeout bên dưới sẽ xử lý việc gửi lại
             
-            try:
-                bot.sendMessage(CHANNEL_ID, "kevent")
-                print("[AUTO BOX] INFO: Đã gửi kevent.", flush=True)
-            except Exception as e:
-                print(f"[AUTO BOX] LỖI: Không thể gửi kevent: {e}", flush=True)
-        else:
-            print("[AUTO BOX] LỖI: Click nút 0 thất bại. Dừng.", flush=True)
+        # Vòng lặp chính
+        while True:
             with lock:
-                is_auto_box_running = False
-                save_settings()
+                if not is_auto_box_running:
+                    break # Thoát vòng lặp
+            
+            current_time = time.time()
+            msg_to_click = latest_game_message
+            
+            # 1. Ưu tiên: Xử lý tin nhắn nếu có
+            if msg_to_click:
+                latest_game_message = None # Xóa tin nhắn để tránh xử lý lại
+                
+                print("[AUTO BOX] INFO: Đã có tin nhắn, đang bấm nút 0...", flush=True)
+                time.sleep(random.uniform(1.0, 1.5)) # Delay nhẹ
+                
+                if click_button_by_index(bot, msg_to_click, 0, "AUTO BOX"):
+                    print("[AUTO BOX] INFO: Click thành công. Chờ và gửi kevent tiếp theo...", flush=True)
+                    time.sleep(random.uniform(2.0, 3.0))
+                else:
+                    print("[AUTO BOX] WARN: Click thất bại. Gửi kevent ngay...", flush=True)
+                
+                # Gửi kevent tiếp theo
+                try:
+                    with lock:
+                        if not is_auto_box_running: break # Kiểm tra lần cuối
+                    bot.sendMessage(CHANNEL_ID, "kevent")
+                    last_kevent_time = time.time()
+                    print("[AUTO BOX] INFO: Đã gửi kevent (sau khi click).", flush=True)
+                except Exception as e:
+                    print(f"[AUTO BOX] LỖI: Không thể gửi kevent (sau khi click): {e}", flush=True)
+                    last_kevent_time = time.time() # Vẫn cập nhật để thử lại sau timeout
+            
+            # 2. Xử lý timeout: Nếu không có tin nhắn VÀ đã quá 3s
+            elif (current_time - last_kevent_time) > KEVENT_TIMEOUT_SECONDS:
+                print(f"[AUTO BOX] INFO: {KEVENT_TIMEOUT_SECONDS}s timeout (không thấy tin nhắn). Gửi lại kevent...", flush=True)
+                try:
+                    with lock:
+                        if not is_auto_box_running: break # Kiểm tra lần cuối
+                    bot.sendMessage(CHANNEL_ID, "kevent")
+                    last_kevent_time = time.time()
+                except Exception as e:
+                    print(f"[AUTO BOX] LỖI: Không thể gửi kevent (timeout): {e}", flush=True)
+                    last_kevent_time = time.time() # Vẫn cập nhật
+                    
+            time.sleep(0.1) # Ngăn busy-loop
 
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready_supplemental:
-            print("[AUTO BOX] Gateway sẵn sàng. Gửi 'kevent' đầu tiên...", flush=True)
-            try:
-                bot.sendMessage(CHANNEL_ID, "kevent")
-            except Exception as e:
-                print(f"[AUTO BOX] LỖI: Không thể gửi kevent đầu tiên: {e}", flush=True)
+            print("[AUTO BOX] Gateway đã kết nối.", flush=True)
+            # Khởi động vòng lặp chính trong một thread riêng
+            threading.Thread(target=auto_box_main_loop, daemon=True).start()
     
     print("[AUTO BOX] Luồng Auto Box đã khởi động...", flush=True)
     try:
@@ -890,7 +934,7 @@ HTML_TEMPLATE = """
         <!-- CHẾ ĐỘ 3: TÍNH NĂNG MỚI -->
         <div class="panel" id="auto-box-panel">
             <h2>Chế độ 3: Auto Nhận Box</h2>
-            <p style="font-size:0.9em; color:#aaa;">Logic: Gửi 'kevent', chờ game, bấm nút 0, lặp lại.</p>
+            <p style="font-size:0.9em; color:#aaa;">Logic: Gửi 'kevent', chờ game, bấm nút 0, lặp lại. (Timeout 3s)</p>
             <div id="auto-box-status" class="status">Trạng thái: ĐÃ DỪNG</div>
             <button id="toggleAutoBoxBtn">Bật Auto Box</button>
         </div>
@@ -957,8 +1001,11 @@ HTML_TEMPLATE = """
             const data = await apiCall('/api/status', 'GET');
             if (data.error) { document.getElementById('event-bot-status').textContent = 'Lỗi kết nối server.'; return; }
             const updateStatus = (elemId, text, className, btnId, btnText, panelId, active) => {
-                document.getElementById(elemId).textContent = text;
-                document.getElementById(elemId).className = className;
+                const elem = document.getElementById(elemId);
+                if (elem) {
+                    elem.textContent = text;
+                    elem.className = className;
+                }
                 if(btnId) document.getElementById(btnId).textContent = btnText;
                 if(panelId) document.getElementById(panelId).classList.toggle('active-mode', active);
             };
@@ -1070,8 +1117,10 @@ HTML_TEMPLATE = """
             if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
             const data = await apiCall('/api/panels', 'GET');
             const container = document.getElementById('panel-container'); 
-            container.innerHTML = '';
-            if (data.panels) data.panels.forEach(panel => container.appendChild(createPanelElement(panel)));
+            if (container) {
+                container.innerHTML = '';
+                if (data.panels) data.panels.forEach(panel => container.appendChild(createPanelElement(panel)));
+            }
         }
         
         async function addPanel() { await apiCall('/api/panel/add'); fetchPanels(); }
@@ -1133,7 +1182,7 @@ def toggle_autoclick():
     data = request.get_json()
     with lock:
         if is_event_bot_running or is_auto_box_running:
-            return jsonify({"status": "error", "message": "Chế độ Event Bot hoặc Auto Box đang chạy. Dừng nó trước."}), 400
+            return jsonify({"status": "error", "message": "Chế độ Event Bot hoặc Auto Box đang chạy. Dừng nó trước."}), 4Dừng
             
         if is_autoclick_running:
             is_autoclick_running = False
@@ -1305,3 +1354,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"[SERVER] Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False)
+
