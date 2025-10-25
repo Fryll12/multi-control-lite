@@ -234,7 +234,12 @@ def run_event_bot_thread():
         m = resp.parsed.auto()
         if not (m.get("author", {}).get("id") == KARUTA_ID and m.get("channel_id") == CHANNEL_ID): return
         with lock:
-            if resp.event.message and "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", ""):
+            # <<< SỬA LỖI EVENT TITLE >>>
+            embed_title = m.get("embeds", [{}])[0].get("title", "")
+            is_event_embed = "Takumi's Solisfair Stand" in embed_title or "Momiji's Halloween Hut" in embed_title
+            # <<< KẾT THÚC SỬA LỖI >>>
+
+            if resp.event.message and is_event_embed: # <<< ĐÃ SỬA
                 active_message_id = m.get("id")
                 action_queue.clear()
                 print(f"\n[EVENT BOT] INFO: Phát hiện game mới. ID: {active_message_id}", flush=True)
@@ -293,7 +298,12 @@ def run_autoclick_bot_thread():
                 return
         if resp.event.message or resp.event.message_updated:
             m = resp.parsed.auto()
-            if (m.get("author", {}).get("id") == KARUTA_ID and m.get("channel_id") == CHANNEL_ID and "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", "")):
+            
+            # <<< SỬA LỖI EVENT TITLE >>>
+            embed_title = m.get("embeds", [{}])[0].get("title", "")
+            is_event_embed = "Takumi's Solisfair Stand" in embed_title or "Momiji's Halloween Hut" in embed_title
+            
+            if (m.get("author", {}).get("id") == KARUTA_ID and m.get("channel_id") == CHANNEL_ID and is_event_embed): # <<< ĐÃ SỬA
                 with lock: autoclick_target_message_data = m
                 print(f"[AUTO CLICK] INFO: Đã cập nhật tin nhắn game. ID: {m.get('id')}", flush=True)
     @bot.gateway.command
@@ -642,10 +652,14 @@ def run_auto_box_thread():
         if not (resp.event.message or resp.event.message_updated): return
         m = resp.parsed.auto()
         
+        # <<< SỬA LỖI EVENT TITLE >>>
+        embed_title = m.get("embeds", [{}])[0].get("title", "")
+        is_event_embed = "Takumi's Solisfair Stand" in embed_title or "Momiji's Halloween Hut" in embed_title
+
         # Nghe tin nhắn game của Karuta trong kênh chính
         if (m.get("author", {}).get("id") == KARUTA_ID and 
             m.get("channel_id") == CHANNEL_ID and 
-            "Takumi's Solisfair Stand" in m.get("embeds", [{}])[0].get("title", "")):
+            is_event_embed): # <<< ĐÃ SỬA
             
             print("[AUTO BOX] INFO: Phát hiện tin nhắn game.", flush=True)
             # Chỉ lưu tin nhắn, không hành động ngay
@@ -870,7 +884,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale-1.0">
+    <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bot Control Panel</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 20px;}
