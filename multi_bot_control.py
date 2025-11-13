@@ -10,6 +10,7 @@ import re
 from collections import deque
 from flask import Flask, jsonify, render_template_string, request
 from dotenv import load_dotenv
+from groq import 
 
 # ===================================================================
 # CẤU HÌNH VÀ BIẾN TOÀN CỤC
@@ -25,6 +26,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
 JSONBIN_BIN_ID = os.getenv("JSONBIN_BIN_ID")
 KARUTA_ID = "646937666251915264"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- Kiểm tra biến môi trường ---
 if not TOKEN:
@@ -413,26 +415,34 @@ def run_auto_kvi_thread():
     KVI_COOLDOWN_SECONDS = 3
     KVI_TIMEOUT_SECONDS = 3605
 
-    def answer_question_with_gemini(bot_instance, message_data, question, options):
-        nonlocal last_api_call_time
-        print(f"[AUTO KVI] GEMINI: Nhận được câu hỏi: '{question}'", flush=True)
-        
-        try:
-            embeds = message_data.get("embeds", [])
-            embed = embeds[0] if embeds else {}
-            desc = embed.get("description", "")
-            
-            character_name = "Unknown"
-            embed_title = embed.get("title", "")
-            if "Character:" in desc:
-                char_match = re.search(r'Character:\s*([^(]+)', desc)
-                if char_match:
-                    character_name = char_match.group(1).strip()
-            elif embed_title:
-                character_name = embed_title.replace("Visit Character", "").strip()
-            
-            prompt = f"""You are playing Karuta's KVI (Visit Character) system. You are interacting with the character: {character_name}. Your goal is to choose the BEST response to build affection and have a positive interaction with {character_name}.
+def answer_question_with_gemini(bot_instance, message_data, question, options):
+    nonlocal last_api_call_time
+    print(f"[AUTO KVI] GROQ: Nhận được câu hỏi: '{question}'", flush=True)
 
+    if not GROQ_API_KEY:
+        print("[AUTO KVI] LỖI: GROQ_API_KEY chưa được cấu hình. Chọn đáp án đầu tiên.", flush=True)
+        click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
+        return
+
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+
+        # Giữ nguyên logic lấy tên nhân vật của bạn
+        embeds = message_data.get("embeds", [])
+        embed = embeds[0] if embeds else {}
+        desc = embed.get("description", "")
+
+        character_name = "Unknown"
+        embed_title = embed.get("title", "")
+        if "Character:" in desc:
+            char_match = re.search(r'Character:\s*([^(]+)', desc)
+            if char_match:
+                character_name = char_match.group(1).strip()
+        elif embed_title:
+            character_name = embed_title.replace("Visit Character", "").strip()
+
+        # Giữ nguyên prompt của bạn (nó rất tốt)
+        prompt = f"""You are playing Karuta's KVI (Visit Character) system. You are interacting with the character: {character_name}. Your goal is to choose the BEST response to build affection and have a positive interaction with {character_name}.
 IMPORTANT RULES:
 1. Choose responses that show interest, care, or positive engagement with {character_name}.
 2. Consider the character's personality if you know it.
