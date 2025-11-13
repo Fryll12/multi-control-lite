@@ -400,8 +400,10 @@ def run_auto_kvi_thread():
         print("[AUTO KVI] LỖI: Chưa cấu hình KVI_CHANNEL_ID.", flush=True)
         with lock: is_auto_kvi_running = False; save_settings()
         return
-    if not GEMINI_API_KEY:
-        print("[AUTO KVI] LỖI: Gemini API Key chưa được cấu hình.", flush=True)
+    
+    # <<< SỬA LỖI >>> KIỂM TRA GROQ KEY THAY VÌ GEMINI KEY
+    if not GROQ_API_KEY:
+        print("[AUTO KVI] LỖI: Groq API Key (GROQ_API_KEY) chưa được cấu hình.", flush=True)
         with lock: is_auto_kvi_running = False; save_settings()
         return
 
@@ -415,34 +417,37 @@ def run_auto_kvi_thread():
     KVI_COOLDOWN_SECONDS = 3
     KVI_TIMEOUT_SECONDS = 3605
 
-def answer_question_with_gemini(bot_instance, message_data, question, options):
-    nonlocal last_api_call_time
-    print(f"[AUTO KVI] GROQ: Nhận được câu hỏi: '{question}'", flush=True)
+    # 
+    # <<< HÀM GROQ MỚI ĐƯỢC ĐẶT BÊN TRONG run_auto_kvi_thread >>>
+    #
+    def answer_question_with_gemini(bot_instance, message_data, question, options):
+        nonlocal last_api_call_time # <--- Dòng này bây giờ sẽ hoạt động
+        print(f"[AUTO KVI] GROQ: Nhận được câu hỏi: '{question}'", flush=True)
 
-    if not GROQ_API_KEY:
-        print("[AUTO KVI] LỖI: GROQ_API_KEY chưa được cấu hình. Chọn đáp án đầu tiên.", flush=True)
-        click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
-        return
-        
-    try:
-        client = Groq(api_key=GROQ_API_KEY)
-        
-        # Giữ nguyên logic lấy tên nhân vật của bạn
-        embeds = message_data.get("embeds", [])
-        embed = embeds[0] if embeds else {}
-        desc = embed.get("description", "")
-        
-        character_name = "Unknown"
-        embed_title = embed.get("title", "")
-        if "Character:" in desc:
-            char_match = re.search(r'Character:\s*([^(]+)', desc)
-            if char_match:
-                character_name = char_match.group(1).strip()
-        elif embed_title:
-            character_name = embed_title.replace("Visit Character", "").strip()
-        
-        # Giữ nguyên prompt của bạn (nó rất tốt)
-        prompt = f"""You are playing Karuta's KVI (Visit Character) system. You are interacting with the character: {character_name}. Your goal is to choose the BEST response to build affection and have a positive interaction with {character_name}.
+        if not GROQ_API_KEY:
+            print("[AUTO KVI] LỖI: GROQ_API_KEY chưa được cấu hình. Chọn đáp án đầu tiên.", flush=True)
+            click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
+            return
+            
+        try:
+            client = Groq(api_key=GROQ_API_KEY)
+            
+            # Giữ nguyên logic lấy tên nhân vật của bạn
+            embeds = message_data.get("embeds", [])
+            embed = embeds[0] if embeds else {}
+            desc = embed.get("description", "")
+            
+            character_name = "Unknown"
+            embed_title = embed.get("title", "")
+            if "Character:" in desc:
+                char_match = re.search(r'Character:\s*([^(]+)', desc)
+                if char_match:
+                    character_name = char_match.group(1).strip()
+            elif embed_title:
+                character_name = embed_title.replace("Visit Character", "").strip()
+            
+            # Giữ nguyên prompt của bạn (nó rất tốt)
+            prompt = f"""You are playing Karuta's KVI (Visit Character) system. You are interacting with the character: {character_name}. Your goal is to choose the BEST response to build affection and have a positive interaction with {character_name}.
 
 IMPORTANT RULES:
 1. Choose responses that show interest, care, or positive engagement with {character_name}.
@@ -459,36 +464,55 @@ Available response options:
 
 Respond with ONLY the number (1, 2, 3, etc.) of the BEST option to increase affection with {character_name}."""
 
-        # Đây là phần gọi API Groq mới
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Question: \"{question}\"\nOptions:\n" + chr(10).join([f"{i+1}. {opt}" for i, opt in enumerate(options)])}
-            ],
-            model="llama3-8b-8192", # Dùng Llama 3 8B, rất nhanh và thông minh
-        )
-        
-        api_text = chat_completion.choices[0].message.content.strip()
-        
-        # Giữ nguyên logic xử lý kết quả
-        match = re.search(r'(\d+)', api_text)
-        if match:
-            selected_option = int(match.group(1))
-            if 1 <= selected_option <= len(options):
-                print(f"[AUTO KVI] GROQ: Chọn đáp án {selected_option}: '{options[selected_option-1]}'", flush=True)
-                time.sleep(random.uniform(1.5, 2.5))
-                if click_button_by_index(bot_instance, message_data, selected_option - 1, "AUTO KVI"):
-                    last_api_call_time = time.time()
+            # Đây là phần gọi API Groq mới
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f"Question: \"{question}\"\nOptions:\n" + chr(10).join([f"{i+1}. {opt}" for i, opt in enumerate(options)])}
+                ],
+                model="llama3-8b-8192", # Dùng Llama 3 8B, rất nhanh và thông minh
+            )
+            
+            api_text = chat_completion.choices[0].message.content.strip()
+            
+            # Giữ nguyên logic xử lý kết quả
+            match = re.search(r'(\d+)', api_text)
+            if match:
+                selected_option = int(match.group(1))
+                if 1 <= selected_option <= len(options):
+                    print(f"[AUTO KVI] GROQ: Chọn đáp án {selected_option}: '{options[selected_option-1]}'", flush=True)
+                    time.sleep(random.uniform(1.5, 2.5))
+                    if click_button_by_index(bot_instance, message_data, selected_option - 1, "AUTO KVI"):
+                        last_api_call_time = time.time()
+                else:
+                    print(f"[AUTO KVI] LỖI: Groq chọn số không hợp lệ: {selected_option}. Chọn đáp án đầu tiên.", flush=True)
+                    click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
             else:
-                print(f"[AUTO KVI] LỖI: Groq chọn số không hợp lệ: {selected_option}. Chọn đáp án đầu tiên.", flush=True)
+                print(f"[AUTO KVI] LỖI: Không tìm thấy số trong phản hồi Groq: '{api_text}'. Chọn đáp án đầu tiên.", flush=True)
                 click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
-        else:
-            print(f"[AUTO KVI] LỖI: Không tìm thấy số trong phản hồi Groq: '{api_text}'. Chọn đáp án đầu tiên.", flush=True)
+
+        except Exception as e:
+            print(f"[AUTO KVI] LỖI API (Groq): {e}. Chọn đáp án đầu tiên.", flush=True)
             click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
 
-    except Exception as e:
-        print(f"[AUTO KVI] LỖI API (Groq): {e}. Chọn đáp án đầu tiên.", flush=True)
-        click_button_by_index(bot_instance, message_data, 0, "AUTO KVI")
+    #
+    # <<< KẾT THÚC HÀM GROQ >>>
+    #
+
+    def smart_button_click(bot_instance, message_data):
+        nonlocal last_api_call_time
+        components = message_data.get("components", [])
+        all_buttons = [button for row in components for button in row.get("components", [])]
+        
+        if all_buttons:
+            target_index = 0
+            button_label = all_buttons[target_index].get("label", "Không rõ")
+            print(f"[AUTO KVI] INFO: Nhấn vào nút ở vị trí đầu tiên (Index 0, Label: {button_label}).", flush=True)
+            time.sleep(random.uniform(1.0, 2.0))
+            if click_button_by_index(bot_instance, message_data, target_index, "AUTO KVI"):
+                last_api_call_time = time.time()
+        else:
+            print("[AUTO KVI] WARN: Không tìm thấy nút nào để bấm.", flush=True)
 
     @bot.gateway.command
     def on_message(resp):
