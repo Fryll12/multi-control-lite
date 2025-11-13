@@ -10,7 +10,7 @@ import re
 from collections import deque
 from flask import Flask, jsonify, render_template_string, request
 from dotenv import load_dotenv
-from groq import 
+from groq import Groq
 
 # ===================================================================
 # CẤU HÌNH VÀ BIẾN TOÀN CỤC
