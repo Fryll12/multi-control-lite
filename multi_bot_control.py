@@ -470,7 +470,7 @@ Respond with ONLY the number (1, 2, 3, etc.) of the BEST option to increase affe
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Question: \"{question}\"\nOptions:\n" + chr(10).join([f"{i+1}. {opt}" for i, opt in enumerate(options)])}
                 ],
-                model="llama3-8b-8192", # Dùng Llama 3 8B, rất nhanh và thông minh
+                model="llama-3.1-8b-instant", # Dùng Llama 3 8B, rất nhanh và thông minh
             )
             
             api_text = chat_completion.choices[0].message.content.strip()
